@@ -70,6 +70,9 @@ def _validate_field(field_name: str, value: Any) -> Tuple[bool, Any, Optional[st
     if field_name not in _FIELD_RULES:
         return True, value, None  # not a schema field — pass to ChromaDB
 
+    if value is None:
+        return False, None, "value is missing or empty"
+
     expected_type, rule = _FIELD_RULES[field_name]
 
     # Attempt type coercion
