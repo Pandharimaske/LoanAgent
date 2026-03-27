@@ -17,8 +17,8 @@ from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.schemas import ConflictExtractionResult, FieldClassification, FieldClassificationResult
-from agent.prompts import CONFLICT_EXTRACTION_PROMPT, FIELD_CLASSIFICATION_PROMPT
+from agent.schemas import FieldClassification, FieldClassificationResult
+from agent.prompts import FIELD_CLASSIFICATION_PROMPT
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -76,61 +76,6 @@ def format_conversation_history(messages: List[Dict[str, str]], max_turns: int =
     
     return "\n".join(history_lines) if history_lines else "No previous conversation"
 
-
-async def extract_conflicts_with_llm(
-    user_input: str,
-    confirmed_facts: Dict[str, Any],
-    dynamic_context: list,
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Use LLM to detect and extract conflicts from user input.
-    
-    Args:
-        user_input: Customer's current message
-        confirmed_facts: Previously verified facts from SQLite
-        dynamic_context: Historical context from ChromaDB
-    
-    Returns:
-        {field: {old_value, new_value, confidence, explanation}} for conflicting fields
-    """
-    try:
-        if not confirmed_facts or not user_input:
-            return {}
-        
-        # Prepare context
-        facts_summary = json.dumps(confirmed_facts, indent=2)
-        context_summary = "\n".join(dynamic_context[:3]) if dynamic_context else "No context available"
-        
-        # Create LLM chain for conflict extraction
-        llm = create_llm(temperature=0.2)  # Lower temp for precise analysis
-        
-        structured_llm = llm.with_structured_output(ConflictExtractionResult)
-        chain = CONFLICT_EXTRACTION_PROMPT | structured_llm
-        
-        # Extract conflicts
-        result = await chain.ainvoke(
-            {
-                "user_input": user_input,
-                "facts_summary": facts_summary,
-                "context_summary": context_summary,
-            }
-        )
-        
-        # Convert to state format using model_dump()
-        conflicts = {}
-        for conflict in result.conflicts:
-            conflicts[conflict.field] = conflict.model_dump(exclude={"field"})
-        
-        logger.info(f"🔍 LLM Conflict Analysis: Found {len(conflicts)} conflict(s)")
-        if conflicts:
-            logger.debug(f"   Conflicts: {list(conflicts.keys())}")
-            logger.debug(f"   Summary: {result.summary}")
-        
-        return conflicts
-        
-    except Exception as e:
-        logger.error(f"❌ Conflict extraction failed: {e}")
-        return {}
 
 
 async def classify_fields_with_llm(

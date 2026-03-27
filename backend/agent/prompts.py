@@ -76,60 +76,35 @@ When storing information, use the exact field names shown below.
 # ROUTER NODE PROMPTS
 # ============================================================================
 
-ROUTER_SYSTEM_PROMPT = """You are an intelligent routing system for a loan agent platform.
+ROUTER_SYSTEM_PROMPT = """You are an intelligent conversational router for a loan agent platform.
 
-Your job is to analyze customer input and route it to the appropriate handler based on:
-1. The intent behind what the customer is saying
-2. Whether there are conflicts between new and confirmed information
-3. Whether the customer is providing information or asking questions
+Note: Memory extraction has already been processed silently in the background. If the user provided new facts (like their name or income), those are already saved. 
+
+Your job is solely to decide how to RESPOND to the user's latest input.
 
 ROUTING RULES:
 
-**handle_mismatch_confirmation**: User provided info that CONFLICTS with existing facts
-  - User says something different from what was previously recorded
-  - Action: Politely ask user to verify/confirm which value is correct with historical context
-  - Example: System has income=₹50k, user says "I earn ₹75k now" → CONFLICT
-
-**handle_memory_update**: User is providing NEW INFORMATION (no conflicts)
-  - PRIORITY: If user EXPLICITLY STATES any factual information, this is handle_memory_update
-  - Examples:
-    * "My name is John" (providing name - new fact to store)
-    * "I earn 50,000 per month" (providing income - new fact to store)
-    * "I work at TCS as a software engineer" (providing employment - new fact to store)
-    * "I have 2 active loans" (providing loan data - new fact to store)
-    * "I just got promoted" (new employment info)
-  - Action: Acknowledge and thank, store new information
-  - NOTE: Preference is handle_memory_update over handle_general when facts are provided
-
-**handle_query**: User is ASKING for information/answers (when context is available)
-  - User is asking questions, requesting information, or seeking clarification
+**handle_query**: User is ASKING for information/answers
+  - User is asking questions, requesting information, or seeking clarification.
   - Examples:
     * "What's my loan status?"
     * "Am I eligible for a 25L loan?"
     * "What's the interest rate?"
     * "How much can I borrow?"
-  - Action: Answer using known facts and available context
+  - Action: Route here so the agent answers using known facts.
 
-**handle_general**: General conversation, small talk, or unclear intent
-  - General chat not related to loan/profile info
-  - Unclear input that doesn't fit other categories
+**handle_general**: General conversation, statements, or small talk
+  - General chat, greetings, or simply providing information without asking a question.
   - Examples:
-    * "Hello" / "How are you?" (pure greeting)
-    * Vague statements without specific facts or questions
-    * Clarification requests that aren't factual or queryable
-  - Action: Engage in natural conversation
-  - NOTE: Only use this if input is NOT providing explicit information
+    * "Hello" / "How are you?" (greeting)
+    * "My name is John" (statement of fact - already saved, just needs acknowledgment)
+    * "Please update my income to 50k" (command - already executed natively, just needs acknowledgment)
+    * "Yes, that's correct" (confirmation)
+  - Action: Route here to engage in natural conversation or acknowledge their input.
 
 DECISION LOGIC:
-1. FIRST: Check if user is EXPLICITLY STATING information (name, income, employment, etc.) → handle_memory_update
-2. SECOND: Check if user input CONFLICTS with existing customer facts → handle_mismatch_confirmation
-3. THIRD: Check if user is ASKING a question → handle_query
-4. DEFAULT: Falls back to handle_general
-
-CONFLICT DETECTION:
-- Compare user input against customer_facts
-- If user mentions a value that differs from stored data → route to handle_mismatch_confirmation
-- Extract old_value (from stored facts) vs new_value (from user input)"""
+1. Check if user is ASKING a question about loans or their profile → handle_query
+2. Otherwise (greetings, statements, facts, small talk) → handle_general"""
 
 
 ROUTER_USER_PROMPT = """Analyze this customer input carefully and route to the correct handler.
@@ -147,20 +122,13 @@ MEMORY CONTEXT:
 ---
 
 ANALYSIS STEPS:
-1. Does the customer EXPLICITLY STATE any information? (name, income, employment, etc.)
-   → If YES → route to handle_memory_update (they're providing new facts)
-   
-2. If providing info, does it CONFLICT with existing facts?
-   → If YES → route to handle_mismatch_confirmation
-   → If NO → route to handle_memory_update
-   
-3. If NOT providing info, are they ASKING a question?
+1. Are they ASKING a question that needs an answer?
    → If YES → route to handle_query
    
-4. Otherwise → route to handle_general
+2. Otherwise (including just providing facts, which are already handled natively) → route to handle_general
 
 Provide your decision:
-- next_handler: Which handler (handle_mismatch_confirmation, handle_memory_update, handle_query, or handle_general)
+- next_handler: Which handler (handle_query or handle_general)
 - reasoning: Why you chose this handler and what you detected
 - confidence: Your confidence 0.0-1.0"""
 
@@ -294,53 +262,6 @@ MISMATCH_VERIFICATION_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
-# ============================================================================
-# CONFLICT EXTRACTION PROMPTS (For Router Node)
-# ============================================================================
-
-CONFLICT_EXTRACTION_SYSTEM_PROMPT = """You are an expert data analyst for a loan platform.
-
-Your job is to analyze customer input and identify any information that CONFLICTS with previously recorded data.
-
-TASK:
-1. Compare the customer's statement against confirmed facts
-2. Identify ONLY explicit conflicts (old value vs new value)
-3. Extract the field name, old value, and new value
-4. Provide confidence score (0.0-1.0)
-5. Explain what changed and why it matters
-
-IMPORTANT: Only report actual conflicts where the user explicitly states a different value.
-Do not speculate or infer - be precise."""
-
-CONFLICT_EXTRACTION_USER_PROMPT = """Analyze this customer statement and extract any conflicting information.
-
-CUSTOMER STATEMENT:
-"{user_input}"
-
-CONFIRMED FACTS (Previously Verified):
-{facts_summary}
-
-HISTORICAL CONTEXT:
-{context_summary}
-
----
-
-If you find conflicts, provide:
-- field: The data field that conflicts
-- old_value: What we previously recorded
-- new_value: What the customer is now saying
-- confidence: How sure you are (0.0-1.0)
-- explanation: Why this conflict matters
-
-If NO conflicts are found, indicate that clearly."""
-
-CONFLICT_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", CONFLICT_EXTRACTION_SYSTEM_PROMPT),
-    ("human", CONFLICT_EXTRACTION_USER_PROMPT),
-])
-
-
-# ============================================================================
 # FIELD CLASSIFICATION PROMPTS (For handle_memory_update - Decide WHERE to store)
 # ============================================================================
 

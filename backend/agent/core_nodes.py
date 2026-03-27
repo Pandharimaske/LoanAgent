@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.state import SessionState
 from agent.prompts import ROUTER_PROMPT
 from agent.schemas import RouterDecision
-from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
+from agent.helpers import format_conversation_history, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.retriever import MemoryRetriever
@@ -264,7 +264,17 @@ async def router(state: SessionState) -> SessionState:
         conv_history    = format_conversation_history(messages[:-1])
         memory_context  = state.get("memory_prompt_block", "No context available")
 
-        # Structured LLM chain
+        # 1. Programmatic Mismatch Override
+        mismatches = state.get("memory_mismatches", {})
+        if mismatches:
+            logger.warning(f"⚠️  Router overriden by programmatic conflict engine: {len(mismatches)} mismatches")
+            state["next_handler"] = "handle_mismatch_confirmation"
+            state["router_reasoning"] = "Programmatic conflict detected during memory extraction"
+            state["router_confidence"] = 1.0
+            state["detected_intent"] = "update_info (mismatch)"
+            return state
+
+        # 2. Structured LLM chain for Query vs General
         base_llm       = create_llm(temperature=0.3)
         structured_llm = base_llm.with_structured_output(RouterDecision)
         chain          =  ROUTER_PROMPT | structured_llm
@@ -279,27 +289,12 @@ async def router(state: SessionState) -> SessionState:
         state["router_reasoning"]   = decision.reasoning
         state["router_confidence"]  = decision.confidence
         
-        # Map handler to intent for frontend metadata
         intent_map = {
-            "handle_mismatch_confirmation": "update_info (mismatch)",
-            "handle_memory_update": "update_info",
             "handle_query": "query_loan",
             "handle_general": "general_chat"
         }
         state["detected_intent"]    = intent_map.get(decision.next_handler, decision.next_handler)
         state["intent_confidence"]  = decision.confidence
-
-        # If routing to mismatch handler, run conflict extraction
-        if decision.next_handler == "handle_mismatch_confirmation":
-            logger.info("🔍 Running conflict extraction pass …")
-            mismatches = await extract_conflicts_with_llm(
-                user_input, customer_facts, dynamic_context
-            )
-            state["mismatched_fields"] = mismatches
-            state["has_mismatch"]      = bool(mismatches)
-        else:
-            state["mismatched_fields"] = {}
-            state["has_mismatch"]      = False
 
         logger.info(
             f"🤖 Router → {decision.next_handler} "

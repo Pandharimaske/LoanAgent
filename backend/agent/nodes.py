@@ -34,7 +34,6 @@ from agent.schemas import (
 # RE-EXPORT HELPERS
 # ============================================================================
 from agent.helpers import (
-    extract_conflicts_with_llm,
     classify_fields_with_llm,
     format_conversation_history,
 )
@@ -53,7 +52,7 @@ from agent.core_nodes import (
 # RE-EXPORT HANDLERS
 # ============================================================================
 from agent.handlers import (
-    handle_memory_update,
+    extract_memory_node,
     handle_mismatch_confirmation,
     handle_query,
     handle_general,
@@ -73,7 +72,7 @@ __all__ = [
     "SchemaFieldValidator",
     "RouterDecision",
     # Helpers
-    "extract_conflicts_with_llm",
+    "extract_memory_node",
     "classify_fields_with_llm",
     "format_conversation_history",
     # Core nodes
@@ -82,7 +81,6 @@ __all__ = [
     "router",
     "end_session",
     # Handlers
-    "handle_memory_update",
     "handle_mismatch_confirmation",
     "handle_query",
     "handle_general",

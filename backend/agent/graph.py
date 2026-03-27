@@ -18,11 +18,13 @@ from agent.nodes import (
     check_token_threshold,
     load_memory,
     router,
+    end_session,
+)
+from agent.handlers import (
+    extract_memory_node,
     handle_mismatch_confirmation,
-    handle_memory_update,
     handle_query,
     handle_general,
-    end_session,
 )
 from agent.edges import CONDITIONAL_EDGES
 
@@ -48,14 +50,14 @@ def build_graph():
     
     graph.add_node("check_token_threshold", check_token_threshold)
     graph.add_node("load_memory", load_memory)
+    graph.add_node("extract_memory_node", extract_memory_node)
     graph.add_node("router", router)
     graph.add_node("handle_mismatch_confirmation", handle_mismatch_confirmation)
-    graph.add_node("handle_memory_update", handle_memory_update)
     graph.add_node("handle_query", handle_query)
     graph.add_node("handle_general", handle_general)
     graph.add_node("end_session", end_session)
     
-    logger.info("✅ Added 8 nodes (mismatch handler added)")
+    logger.info("✅ Added 8 nodes (extract_memory_node added, handle_memory_update removed)")
     
     # ========================================================================
     # ADD LINEAR EDGES
@@ -63,13 +65,13 @@ def build_graph():
     
     logger.info("Adding linear edges...")
     
-    # New priority-based flow
+    # Universal extraction happens before router
     graph.add_edge("check_token_threshold", "load_memory")
-    graph.add_edge("load_memory", "router")
+    graph.add_edge("load_memory", "extract_memory_node")
+    graph.add_edge("extract_memory_node", "router")
     
-    # All handlers go to end_session
+    # All terminal handlers go to end_session
     graph.add_edge("handle_mismatch_confirmation", "end_session")
-    graph.add_edge("handle_memory_update", "end_session")
     graph.add_edge("handle_query", "end_session")
     graph.add_edge("handle_general", "end_session")
     
