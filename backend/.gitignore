@@ -1,0 +1,27 @@
+# Secrets & config
+.env
+masterplan.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+
+# Data (local DBs)
+data/memory.db
+data/chroma_db/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test / temp
+test_output.txt
+*.log
