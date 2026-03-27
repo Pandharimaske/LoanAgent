@@ -1,28 +1,11 @@
 """
 User authentication models and utilities.
-Supports customer login with password hashing.
+Supports user login with password hashing.
 """
 
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
-from enum import Enum
-
-
-class UserRole(str, Enum):
-    """User roles."""
-    CUSTOMER = "customer"
-    AGENT = "agent"
-    ADMIN = "admin"
-
-
-class UserStatus(str, Enum):
-    """User account status."""
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    SUSPENDED = "suspended"
-    VERIFIED = "verified"
-    PENDING_VERIFICATION = "pending_verification"
 
 
 class UserBase(BaseModel):
@@ -60,18 +43,13 @@ class UserCreate(UserBase):
 class User(UserBase):
     """User model (with ID and metadata)."""
     user_id: str
-    role: UserRole = UserRole.CUSTOMER
-    status: UserStatus = UserStatus.ACTIVE
-    is_verified: bool = False
-    customer_id: Optional[str] = None  # For customers, link to customer_id
+    customer_id: Optional[str] = None
     created_at: datetime
     last_login: Optional[datetime] = None
     
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat(),
-            UserRole: lambda v: v.value,
-            UserStatus: lambda v: v.value,
         }
 
 
@@ -87,9 +65,6 @@ class UserResponse(BaseModel):
     username: str
     email: str
     name: str
-    role: UserRole
-    status: UserStatus
-    is_verified: bool
     customer_id: Optional[str] = None
     created_at: datetime
     last_login: Optional[datetime] = None
@@ -115,7 +90,6 @@ class TokenData(BaseModel):
     user_id: str
     email: str
     customer_id: Optional[str] = None
-    role: UserRole
     issued_at: datetime
     expires_at: datetime
 

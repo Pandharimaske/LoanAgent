@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import SQLITE_PATH
-from auth.models import User, UserCreate, UserRole, UserStatus, UserSession
+from auth.models import User, UserCreate, UserSession
 from auth.utils import PasswordManager, UserIDGenerator, TokenManager
 
 
@@ -133,8 +133,8 @@ class UserDatabase:
                 """
                 INSERT INTO users (
                     user_id, username, email, name, password_hash,
-                    role, status, customer_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    customer_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -142,8 +142,6 @@ class UserDatabase:
                     email,
                     name,
                     password_hash,
-                    UserRole.CUSTOMER.value,
-                    UserStatus.ACTIVE.value,
                     customer_id,
                     datetime.now().isoformat(),
                 ),
@@ -194,10 +192,6 @@ class UserDatabase:
             # Verify password
             if not PasswordManager.verify_password(password, user["password_hash"]):
                 return False, None, "Invalid email or password"
-
-            # Check if user is active
-            if user["status"] != UserStatus.ACTIVE.value:
-                return False, None, f"User account is {user['status']}"
 
             # Create session
             session_id = UserIDGenerator.generate_session_id()
