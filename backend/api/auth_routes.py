@@ -298,6 +298,114 @@ async def check_session(
 
 
 # ============================================================================
+# ALIAS ROUTES
+# ============================================================================
+
+@router.post("/signup", response_model=RegisterResponse)
+async def signup(
+    request: RegisterRequest,
+    db: UserDatabase = Depends(get_db),
+):
+    """
+    Signup - Alias for register endpoint.
+    Allows frontend to use either /register or /signup.
+    """
+    return await register(request, db)
+
+
+# ============================================================================
+# PROFILE ENDPOINT
+# ============================================================================
+
+from typing import Dict, Any
+from fastapi import Header
+
+class ProfileResponse(BaseModel):
+    """User profile response."""
+    success: bool
+    user: Dict[str, Any]
+    message: Optional[str] = None
+
+
+@router.get("/profile", response_model=ProfileResponse)
+async def get_profile(
+    authorization: Optional[str] = Header(None),
+    session_id: Optional[str] = None,
+    db: UserDatabase = Depends(get_db),
+):
+    """
+    Get user profile data from JWT token or session_id.
+    
+    Args:
+        authorization: Bearer token from Authorization header
+        session_id: Session ID from query params (fallback)
+        db: Database connection
+        
+    Returns:
+        User profile data (name, email, customer_id, etc.)
+    """
+    try:
+        user_id = None
+        customer_id = None
+        
+        # Try to get user_id from JWT token
+        if authorization:
+            try:
+                token = authorization.replace("Bearer ", "")
+                payload = TokenManager.verify_jwt_token(token)
+                user_id = payload.get("user_id")
+                customer_id = payload.get("customer_id")
+            except Exception as token_err:
+                # Token verification failed, try session_id
+                pass
+        
+        # Fallback to session_id
+        if not user_id and session_id:
+            session = db.get_session(session_id)
+            if session:
+                user_id = session.user_id
+                customer_id = session.customer_id
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token or session",
+            )
+        
+        # Get user data
+        user = db.get_user(user_id)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+        
+        # Return user profile (exclude sensitive data)
+        user_data = {
+            "user_id": user.user_id,
+            "email": user.email,
+            "name": user.name,
+            "customer_id": customer_id,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+        
+        return ProfileResponse(
+            success=True,
+            user=user_data,
+            message="Profile retrieved successfully",
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Profile error: {str(e)}",
+        )
+
+
+# ============================================================================
 # HEALTH CHECK
 # ============================================================================
 

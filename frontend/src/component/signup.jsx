@@ -44,8 +44,31 @@ const SignUp = () => {
         formData
       );
 
-      localStorage.setItem("userId", response.data.data?._id || "");
-      navigate("/dashboard");
+      if (response.data.success) {
+        // Store user data - even without JWT, we have user_id
+        localStorage.setItem("user_id", response.data.user_id);
+        localStorage.setItem("email", response.data.email);
+        
+        // Now login to get JWT token
+        try {
+          const loginResponse = await axios.post(
+            `${import.meta.env.VITE_BASE_URL}/auth/login`,
+            {
+              email: email,
+              password: password,
+            }
+          );
+          
+          if (loginResponse.data.success) {
+            localStorage.setItem("token", loginResponse.data.jwt_token);
+            localStorage.setItem("customer_id", loginResponse.data.customer_id);
+            navigate("/dashboard");
+          }
+        } catch (loginErr) {
+          // Signup succeeded but login failed - redirect to login page
+          navigate("/login");
+        }
+      }
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || err.response?.data?.message || "Something went wrong. Try again.");
