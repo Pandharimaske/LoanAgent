@@ -19,6 +19,10 @@ from api.chat_routes import router as chat_router
 from auth.user_store import UserDatabase
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
+from utils.observability import init_langsmith
+
+# Initialize LangSmith observability
+init_langsmith()
 
 # Create FastAPI app
 app = FastAPI(

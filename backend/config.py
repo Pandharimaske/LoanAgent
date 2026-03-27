@@ -82,6 +82,14 @@ SUPPORTED_LANGUAGES = ["en", "hi", "mixed"]
 ENABLE_HINDI_SUPPORT = os.getenv("ENABLE_HINDI_SUPPORT", "true").lower() == "true"
 
 # ============================================================================
+# LANGSMITH OBSERVABILITY
+# ============================================================================
+
+LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY", "")
+LANGSMITH_TRACING_V2 = os.getenv("LANGSMITH_TRACING_V2", "true").lower() == "true"
+LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "LoanAgent")
+
+# ============================================================================
 # LOGGING & DEBUG
 # ============================================================================
 
@@ -121,6 +129,13 @@ def print_config():
     print("\n🗣️  Language:")
     print(f"   DEFAULT_LANGUAGE:    {DEFAULT_LANGUAGE}")
     print(f"   ENABLE_HINDI_SUPPORT: {ENABLE_HINDI_SUPPORT}")
+    
+    print("\n📊 LangSmith Observability:")
+    langsmith_enabled = "ENABLED" if LANGSMITH_TRACING_V2 else "DISABLED"
+    api_key_status = "SET" if LANGCHAIN_API_KEY else "NOT SET"
+    print(f"   LANGSMITH_TRACING_V2: {langsmith_enabled}")
+    print(f"   LANGSMITH_PROJECT:    {LANGSMITH_PROJECT}")
+    print(f"   LANGCHAIN_API_KEY:    {api_key_status}")
     
     print("\n⚙️  Other:")
     print(f"   DEBUG:    {DEBUG}")
