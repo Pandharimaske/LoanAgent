@@ -4,10 +4,9 @@ LangGraph Edge Definitions — Conditional routing between nodes.
 New Restructured Flow:
 1. check_token_threshold (FIRST)
 2. load_memory
-3. extract_entities
-4. router (decides next handler)
-5. handle_memory_update | handle_query | handle_general
-6. end_session
+3. router (decides next handler)
+4. handle_memory_update | handle_query | handle_general
+5. end_session
 """
 
 from agent.state import SessionState

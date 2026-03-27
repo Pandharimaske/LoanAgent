@@ -17,7 +17,6 @@ from agent.state import SessionState
 from agent.nodes import (
     check_token_threshold,
     load_memory,
-    extract_entities,
     router,
     handle_memory_update,
     handle_query,
@@ -48,14 +47,13 @@ def build_graph():
     
     graph.add_node("check_token_threshold", check_token_threshold)
     graph.add_node("load_memory", load_memory)
-    graph.add_node("extract_entities", extract_entities)
     graph.add_node("router", router)
     graph.add_node("handle_memory_update", handle_memory_update)
     graph.add_node("handle_query", handle_query)
     graph.add_node("handle_general", handle_general)
     graph.add_node("end_session", end_session)
     
-    logger.info("✅ Added 8 nodes (new flow order)")
+    logger.info("✅ Added 7 nodes (new flow order)")
     
     # ========================================================================
     # ADD LINEAR EDGES
@@ -65,15 +63,14 @@ def build_graph():
     
     # New priority-based flow
     graph.add_edge("check_token_threshold", "load_memory")
-    graph.add_edge("load_memory", "extract_entities")
-    graph.add_edge("extract_entities", "router")
+    graph.add_edge("load_memory", "router")
     
     # All handlers go to end_session
     graph.add_edge("handle_memory_update", "end_session")
     graph.add_edge("handle_query", "end_session")
     graph.add_edge("handle_general", "end_session")
     
-    logger.info("✅ Added 6 linear edges")
+    logger.info("✅ Added 5 linear edges")
     
     # ========================================================================
     # ADD CONDITIONAL EDGES

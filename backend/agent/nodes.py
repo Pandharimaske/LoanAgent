@@ -4,10 +4,9 @@ LangGraph Node Implementations — Restructured Flow
 Flow Order:
 1. check_token_threshold - Check & summarize if needed (FIRST)
 2. load_memory - Retrieve SQLite + ChromaDB context
-3. extract_entities - Parse input, detect intent & mismatches
-4. router - Decide which handler to use
-5. Handlers: handle_memory_update / handle_query / handle_general
-6. end_session - Persist all updates
+3. router - Decide which handler to use
+4. Handlers: handle_memory_update / handle_query / handle_general
+5. end_session - Persist all updates
 """
 
 import sys
@@ -138,64 +137,7 @@ async def load_memory(state: SessionState) -> SessionState:
 
 
 # ============================================================================
-# NODE 3: EXTRACT_ENTITIES
-# ============================================================================
-
-async def extract_entities(state: SessionState) -> SessionState:
-    """
-    Extract structured data from user input using Ollama.
-    Detect intent and check for mismatches with confirmed facts.
-    """
-    try:
-        user_input = state.get("user_input", "")
-        confirmed_facts = state.get("confirmed_facts", {})
-        
-        if not user_input:
-            state["error"] = "No user_input"
-            return state
-        
-        prompt = f"""Extract data and detect intent.
-
-USER: {user_input}
-CONFIRMED: {json.dumps(confirmed_facts)}
-
-Return JSON:
-{{
-    "extracted_entities": {{}},
-    "detected_intent": "update_info|query_loan|ask_status|general",
-    "intent_confidence": 0.0-1.0,
-    "has_mismatch": boolean,
-    "mismatched_fields": {{}}
-}}"""
-        
-        client = OllamaClient()
-        response = await client.generate(prompt)
-        
-        try:
-            result = json.loads(response)
-            state["extracted_entities"] = result.get("extracted_entities", {})
-            state["detected_intent"] = result.get("detected_intent", "general_chat")
-            state["intent_confidence"] = result.get("intent_confidence", 0.5)
-            state["has_mismatch"] = result.get("has_mismatch", False)
-            state["mismatched_fields"] = result.get("mismatched_fields", {})
-            logger.info(f"🎯 Intent: {state['detected_intent']}")
-        except json.JSONDecodeError as je:
-            logger.error(f"JSON parse error: {je}")
-            state["detected_intent"] = "general_chat"
-            state["has_mismatch"] = False
-            state["extracted_entities"] = {}
-            state["mismatched_fields"] = {}
-        
-        return state
-        
-    except Exception as e:
-        logger.error(f"❌ Extraction failed: {e}")
-        state["error"] = str(e)
-        return state
-
-
-# ============================================================================
-# NODE 4: ROUTER
+# NODE 3: ROUTER
 # ============================================================================
 
 async def router(state: SessionState) -> SessionState:
