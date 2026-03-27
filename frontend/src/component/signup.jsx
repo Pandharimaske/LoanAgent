@@ -40,12 +40,12 @@ const SignUp = () => {
       setLoading(true);
 
       const response = await axios.post(
-        "http://localhost:8000/api/auth/signup",
+        "http://localhost:8000/api/auth/register",
         formData
       );
 
       localStorage.setItem("userId", response.data.data?._id || "");
-      navigate("/dashboard");
+      navigate("/dashboard");x
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.message || "Something went wrong. Try again.");
