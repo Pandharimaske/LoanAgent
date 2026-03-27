@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import DEBUG, LOG_LEVEL
 from api.auth_routes import router as auth_router
+from api.session_routes import router as session_router
 from auth.user_store import UserDatabase
 
 # Create FastAPI app
@@ -44,6 +45,9 @@ app.add_middleware(
 
 # Include auth routes
 app.include_router(auth_router)
+
+# Include session routes
+app.include_router(session_router)
 
 
 # ============================================================================
