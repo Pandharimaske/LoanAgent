@@ -31,9 +31,8 @@ from memory.vector_store import VectorStore
 from config import SQLITE_PATH, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
-# ============================================================================
-# FIELD VALIDATION HELPERS
-# ============================================================================
+
+
 
 # Per-field type + range rules used for pre-storage validation
 _FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
@@ -243,7 +242,7 @@ async def handle_memory_update(state: SessionState) -> SessionState:
 
         state["agent_response"] = " ".join(parts)
         state["memory_updates"] = [
-            {"field": f, "value": v, "type": "schema", "status": "pending"}
+            {"field": f, "value": v, "type": "schema"}
             for f, v in valid_schema.items()
         ] + [
             {"field": clf.field_name or k, "value": clf.raw_value, "type": "contextual"}

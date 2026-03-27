@@ -268,7 +268,7 @@ async def router(state: SessionState) -> SessionState:
         # Structured LLM chain
         base_llm       = create_llm(temperature=0.3)
         structured_llm = base_llm.with_structured_output(RouterDecision)
-        chain          = ROUTER_PROMPT | structured_llm
+        chain          =  ROUTER_PROMPT | structured_llm
 
         decision: RouterDecision = await chain.ainvoke({
             "user_input":           user_input,
