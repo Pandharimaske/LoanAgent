@@ -22,7 +22,6 @@ from agent.schemas import RouterDecision
 from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
-from memory.models import MemoryStatus
 from config import (
     SQLITE_PATH,
     CHROMA_PATH,
@@ -79,8 +78,8 @@ async def load_memory(state: SessionState) -> SessionState:
     
     Also initializes conversation message history if not already done.
     
-    Tier 1: Confirmed facts (income, CIBIL, etc)
-    Tier 2/3: Dynamic context + summaries
+    Tier 1: Confirmed facts (income, CIBIL, name, phone, etc) via SQL
+    Tier 2/3: Dynamic context + summaries via ChromaDB search
     """
     try:
         customer_id = state.get("customer_id")
@@ -104,30 +103,28 @@ async def load_memory(state: SessionState) -> SessionState:
             })
             logger.info(f"📝 Message added to history (total: {len(state['messages'])})")
         
-        # Load from SQLite
+        # ====================================================================
+        # RETRIEVE CONFIRMED FACTS FROM SQLite USING SIMPLE SQL
+        # ====================================================================
         db = MemoryDatabase(db_path=SQLITE_PATH)
         db.connect()
-        memory = db.load_customer_memory(customer_id)
+        confirmed_facts = db.get_confirmed_facts(customer_id)
         db.close()
         
-        confirmed_facts = {}
-        if memory:
-            if hasattr(memory, 'monthly_income') and memory.monthly_income:
-                if hasattr(memory.monthly_income, 'current') and memory.monthly_income.current:
-                    if memory.monthly_income.current.status == MemoryStatus.CONFIRMED:
-                        confirmed_facts["monthly_income"] = memory.monthly_income.current.value
-            
-            if hasattr(memory, 'cibil_score') and memory.cibil_score:
-                if hasattr(memory.cibil_score, 'current') and memory.cibil_score.current:
-                    if memory.cibil_score.current.status == MemoryStatus.CONFIRMED:
-                        confirmed_facts["cibil_score"] = memory.cibil_score.current.value
-        
         state["confirmed_facts"] = confirmed_facts
-        logger.info(f"✅ Loaded {len(confirmed_facts)} confirmed facts")
+        logger.info(f"✅ Loaded {len(confirmed_facts)} confirmed facts from SQLite")
         
-        # Load from ChromaDB
+        if confirmed_facts:
+            # Log loaded fields
+            for key, val in list(confirmed_facts.items())[:3]:
+                logger.info(f"   - {key}: {val}")
+            if len(confirmed_facts) > 3:
+                logger.info(f"   ... and {len(confirmed_facts) - 3} more fields")
+        
+        # ====================================================================
+        # RETRIEVE DYNAMIC CONTEXT FROM ChromaDB (SEMANTIC SEARCH)
+        # ====================================================================
         vs = VectorStore(persist_path=CHROMA_PATH)
-        user_input = state.get("user_input", "")
         
         if user_input:
             try:

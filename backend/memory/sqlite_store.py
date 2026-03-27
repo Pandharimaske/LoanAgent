@@ -7,8 +7,9 @@ Stores factual/structured data. Session summaries go to ChromaDB.
 import sys
 import sqlite3
 import json
+import logging
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -29,6 +30,12 @@ from memory.models import (
     create_test_memory,
 )
 from memory.encryption import get_encryption_manager
+
+
+# ============================================================================
+# LOGGER SETUP
+# ============================================================================
+logger = logging.getLogger(__name__)
 
 
 class MemoryDatabase:
@@ -499,6 +506,109 @@ class MemoryDatabase:
             import traceback
             traceback.print_exc()
             return None, None
+
+    def get_confirmed_facts(self, customer_id: str) -> Dict[str, Any]:
+        """
+        Retrieve only CONFIRMED facts from database using SQL JSON extraction.
+        Much simpler than full deserialization - just get the values.
+        
+        Returns dict of {field_name: value} for all confirmed facts.
+        """
+        self._ensure_connection()
+        confirmed_facts = {}
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # ====================================================================
+            # SQL JSON EXTRACTION — NonPII fields
+            # ====================================================================
+            # Extract current.value from JSON where current.status == "confirmed"
+            
+            nonpii_fields = [
+                ("monthly_income_json", "monthly_income"),
+                ("cibil_score_json", "cibil_score"),
+                ("income_type_json", "income_type"),
+                ("total_work_experience_years_json", "total_work_experience_years"),
+                ("number_of_active_loans_json", "number_of_active_loans"),
+                ("total_existing_emi_monthly_json", "total_existing_emi_monthly"),
+            ]
+            
+            cursor.execute(
+                "SELECT * FROM customer_memory_nonpii WHERE customer_id = ?",
+                (customer_id,)
+            )
+            row = cursor.fetchone()
+            
+            if row:
+                r = dict(row)
+                
+                # Extract each field using JSON parsing
+                for col_name, field_name in nonpii_fields:
+                    json_str = r.get(col_name)
+                    if json_str:
+                        try:
+                            data = json.loads(json_str)
+                            # FixedEntity format: {"current": {value, status, ...}, "history": [...]}
+                            if data and data.get("current", {}).get("status") == "confirmed":
+                                value = data["current"].get("value")
+                                if value is not None:
+                                    confirmed_facts[field_name] = value
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                
+                # Application status (not JSON)
+                if r.get("application_status"):
+                    confirmed_facts["application_status"] = r["application_status"]
+            
+            # ====================================================================
+            # SQL JSON EXTRACTION — PII fields (need decryption)
+            # ====================================================================
+            
+            pii_fields = [
+                ("full_name_encrypted", "full_name"),
+                ("primary_phone_encrypted", "primary_phone"),
+                ("current_address_encrypted", "current_address"),
+                ("city_encrypted", "city"),
+                ("state_encrypted", "state"),
+                ("pincode_encrypted", "pincode"),
+                ("employer_name_encrypted", "employer_name"),
+                ("years_at_current_job_encrypted", "years_at_current_job"),
+                ("date_of_birth_encrypted", "date_of_birth"),
+                ("gender_encrypted", "gender"),
+                ("marital_status_encrypted", "marital_status"),
+            ]
+            
+            cursor.execute(
+                "SELECT * FROM customer_memory_pii WHERE customer_id = ?",
+                (customer_id,)
+            )
+            pii_row = cursor.fetchone()
+            
+            if pii_row:
+                p = dict(pii_row)
+                
+                # Decrypt and extract each PII field
+                for col_name, field_name in pii_fields:
+                    encrypted_val = p.get(col_name)
+                    if encrypted_val:
+                        try:
+                            # Decrypt the JSON string
+                            decrypted_json = self.encryption.decrypt(encrypted_val)
+                            data = json.loads(decrypted_json)
+                            # FixedEntity format
+                            if data and data.get("current", {}).get("status") == "confirmed":
+                                value = data["current"].get("value")
+                                if value is not None:
+                                    confirmed_facts[field_name] = value
+                        except Exception as e:
+                            logger.warning(f"⚠️  Failed to decrypt {field_name}: {e}")
+            
+            return confirmed_facts
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get confirmed facts: {e}")
+            return {}
 
     # ========================================================================
     # CUSTOMER — UTILITIES
