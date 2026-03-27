@@ -53,7 +53,7 @@ export default function Home() {
           <span style={styles.navName}>BrainBack.AI</span>
         </div>
         <div style={styles.navActions}>
-          <button onClick={() => navigate("/login")} style={styles.navLoginBtn}
+          <button onClick={() => navigate("/dashboard")} style={styles.navLoginBtn}
             onMouseEnter={e => { e.currentTarget.style.color = "#f0f4ff"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "#94a3b8"; e.currentTarget.style.background = "transparent"; }}>
             Sign In
