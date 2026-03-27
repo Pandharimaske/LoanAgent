@@ -19,7 +19,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.sqlite_store_simplified import MemoryDatabase
+from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.models import CustomerMemory
 from config import VECTOR_SEARCH_TOP_K

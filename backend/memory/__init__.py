@@ -11,7 +11,7 @@ Exports:
 
 from memory.models import CustomerMemory
 
-from memory.sqlite_store_simplified import MemoryDatabase
+from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.retriever import MemoryRetriever
 from memory.encryption import EncryptionManager, get_encryption_manager

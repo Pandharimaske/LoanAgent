@@ -21,7 +21,7 @@ from agent.state import SessionState
 from agent.prompts import ROUTER_PROMPT
 from agent.schemas import RouterDecision
 from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
-from memory.sqlite_store_simplified import MemoryDatabase
+from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from config import (
     SQLITE_PATH,

@@ -17,7 +17,7 @@ from api.auth_routes import router as auth_router
 from api.session_routes import router as session_router
 from api.chat_routes import router as chat_router
 from auth.user_store import UserDatabase
-from memory.sqlite_store_simplified import MemoryDatabase
+from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from utils.observability import init_langsmith
 

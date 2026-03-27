@@ -26,7 +26,7 @@ from agent.prompts import (
 )
 from agent.helpers import classify_fields_with_llm, create_llm
 from agent.schemas import FieldClassification
-from memory.sqlite_store_simplified import MemoryDatabase, FIELD_TO_STATUS_COLUMN, VALID_COLUMNS
+from memory.sqlite_store import MemoryDatabase, FIELD_TO_STATUS_COLUMN, VALID_COLUMNS
 from memory.vector_store import VectorStore
 from config import SQLITE_PATH, CHROMA_PATH
 
