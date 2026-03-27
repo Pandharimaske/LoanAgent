@@ -3,6 +3,7 @@ Agent Chat Routes — LangGraph integration for conversational AI.
 
 FIX #5  — message history is carried forward across turns (not reset each request).
 FIX #8  — graph is compiled once via get_graph() (not rebuilt per request).
+FIX #10 — session messages are seeded from and persisted to user_sessions DB.
 """
 
 import logging
@@ -16,6 +17,8 @@ from pydantic import BaseModel
 # FIX #8 — use singleton accessor instead of build_graph()
 from agent.graph import get_graph
 from agent.state import SessionState
+from auth.user_store import UserDatabase
+from config import SQLITE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +92,40 @@ def _get_session(session_id: str) -> Optional[Dict[str, Any]]:
     return SESSIONS.get(session_id)
 
 
-def _create_session(customer_id: str, language: str = "en") -> str:
-    session_id = str(uuid.uuid4())
-    SESSIONS[session_id] = {
-        "session_id":   session_id,
+def _count_tokens_approx(messages: List[Dict[str, Any]]) -> int:
+    """Rough token estimate — 4 chars ≈ 1 token. Used to seed total_tokens."""
+    return sum(len(m.get("content", "") or "") // 4 for m in messages)
+
+
+def _create_session(customer_id: str, language: str = "en", session_id: str | None = None) -> str:
+    """
+    Create an in-memory session entry, seeding message history from DB if
+    an existing session_id is provided (e.g. user resuming after server restart).
+    """
+    sid = session_id or str(uuid.uuid4())
+
+    # FIX #10 — seed messages from DB when resuming an existing session
+    prior_messages: List[Dict[str, Any]] = []
+    if session_id:
+        try:
+            with UserDatabase(db_path=SQLITE_PATH) as db:
+                prior_messages = db.get_session_messages(session_id)
+        except Exception as e:
+            logger.warning(f"⚠️  Could not load prior messages from DB: {e}")
+
+    SESSIONS[sid] = {
+        "session_id":   sid,
         "customer_id":  customer_id,
         "language":     language,
         "created_at":   datetime.now().isoformat(),
-        "messages":     [],           # FIX #5 — persistent message buffer
-        "total_tokens": 0,            # FIX #6 — carries token count across turns
+        "messages":     prior_messages,          # seeded from DB (or [] for brand-new)
+        "total_tokens": _count_tokens_approx(prior_messages),  # recalculate
     }
-    logger.info(f"✅ Session created: {session_id} for {customer_id}")
-    return session_id
+    logger.info(
+        f"✅ Session created: {sid} for {customer_id} "
+        f"| {len(prior_messages)} prior messages loaded"
+    )
+    return sid
 
 
 # ============================================================================
@@ -137,10 +162,18 @@ async def send_message(request: ChatRequest):
     """
     try:
         # Resolve or create session
+        # FIX #10 — if session_id provided but not in memory (e.g. server restart),
+        #           re-create the in-memory entry, seeding from DB.
         session_id = request.session_id
-        if not session_id or session_id not in SESSIONS:
+        if not session_id:
             session_id = _create_session(request.customer_id, request.language or "en")
-        
+        elif session_id not in SESSIONS:
+            session_id = _create_session(
+                request.customer_id,
+                request.language or "en",
+                session_id=session_id,   # ← seed from DB
+            )
+
         session_data = SESSIONS[session_id]
         language = session_data.get("language", request.language or "en")
 
@@ -169,9 +202,10 @@ async def send_message(request: ChatRequest):
             "messages": prior_messages,
 
             # Memory (loaded by load_memory node)
-            "confirmed_facts":   {},
+            "customer_facts":    {},
             "dynamic_context":   [],
             "session_summaries": [],
+            "memory_prompt_block": None,
 
             # Entity extraction
             "extracted_entities": {},
@@ -221,15 +255,26 @@ async def send_message(request: ChatRequest):
             final_state["agent_response"] = "I encountered an internal error. Please try again."
 
         # ------------------------------------------------------------------
-        # FIX #5 — persist updated messages + token count back to session store
+        # FIX #5  — persist updated messages + token count back to in-memory store
+        # FIX #10 — also write messages back to user_sessions DB for durability
         # ------------------------------------------------------------------
-        SESSIONS[session_id]["messages"]     = final_state.get("messages", prior_messages)
-        SESSIONS[session_id]["total_tokens"] = final_state.get("total_tokens", 0)
+        updated_messages = final_state.get("messages", prior_messages)
+        updated_tokens   = final_state.get("total_tokens", 0)
+
+        SESSIONS[session_id]["messages"]     = updated_messages
+        SESSIONS[session_id]["total_tokens"] = updated_tokens
+
+        # Persist to DB (non-fatal if it fails)
+        try:
+            with UserDatabase(db_path=SQLITE_PATH) as db:
+                db.save_session_messages(session_id, updated_messages)
+        except Exception as db_err:
+            logger.warning(f"⚠️  Could not persist messages to DB: {db_err}")
 
         logger.info(
             f"✅ [{session_id[:8]}] done | "
-            f"tokens={final_state.get('total_tokens',0)} | "
-            f"msgs={len(SESSIONS[session_id]['messages'])}"
+            f"tokens={updated_tokens} | "
+            f"msgs={len(updated_messages)}"
         )
 
         return ChatResponse(

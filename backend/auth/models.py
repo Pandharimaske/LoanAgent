@@ -76,7 +76,8 @@ class UserSession(BaseModel):
     last_activity: datetime
     expires_at: datetime
     is_active: bool = True
-    
+    messages: list = []
+
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
 

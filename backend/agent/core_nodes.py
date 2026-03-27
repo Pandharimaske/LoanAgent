@@ -23,6 +23,7 @@ from agent.schemas import RouterDecision
 from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
+from memory.retriever import MemoryRetriever
 from config import (
     SQLITE_PATH,
     CHROMA_PATH,
@@ -154,13 +155,15 @@ async def check_token_threshold(state: SessionState) -> SessionState:
 
 async def load_memory(state: SessionState) -> SessionState:
     """
-    Load customer context from SQLite (confirmed facts) + ChromaDB (semantic).
+    Load customer context from SQLite (facts) + ChromaDB (semantic chunks + summaries).
 
-    Does NOT reset message history — that is managed by check_token_threshold
-    and chat_routes.  Only appends the current user input to history.
+    Uses MemoryRetriever to build a full 3-tier context block:
+      Tier 1 — SQLite  : all known structured facts (income, CIBIL, employer …)
+      Tier 2 — ChromaDB: top-K semantically relevant contextual chunks
+      Tier 3 — ChromaDB: last N session summaries
 
-    Tier 1 — SQLite  : confirmed structured facts (income, CIBIL, name …)
-    Tier 2 — ChromaDB: top-K semantically relevant chunks for this query
+    Does NOT write to ChromaDB — only reads.
+    Does NOT reset message history — only appends the current user input.
     """
     try:
         customer_id = state.get("customer_id")
@@ -168,17 +171,14 @@ async def load_memory(state: SessionState) -> SessionState:
             state["error"] = "No customer_id in state"
             return state
 
-        session_id  = state.get("session_id", f"session_{datetime.now().timestamp()}")
-        user_input  = (state.get("user_input") or "").strip()
+        session_id = state.get("session_id", f"session_{datetime.now().timestamp()}")
+        user_input = (state.get("user_input") or "").strip()
 
-        # ----------------------------------------------------------------
-        # FIX #5 — only initialise messages list if it is truly absent.
-        # Chat routes already carries messages forward across turns.
-        # ----------------------------------------------------------------
+        # Preserve existing messages (do NOT reset)
         if "messages" not in state or state["messages"] is None:
             state["messages"] = []
 
-        # Append current user turn to in-memory history
+        # Append current user turn
         if user_input:
             state["messages"].append({
                 "role": "user",
@@ -187,53 +187,48 @@ async def load_memory(state: SessionState) -> SessionState:
             })
 
         # ----------------------------------------------------------------
-        # Tier 1 — SQLite: confirmed facts
+        # Use MemoryRetriever for full 3-tier context
         # ----------------------------------------------------------------
         try:
+            retriever = MemoryRetriever(
+                db=MemoryDatabase(db_path=SQLITE_PATH),
+                vector_store=VectorStore(persist_path=CHROMA_PATH),
+            )
+            context_result = retriever.build_context(
+                customer_id=customer_id,
+                current_turn=user_input or "general",
+                n_chunks=VECTOR_SEARCH_TOP_K,
+                n_summaries=2,
+            )
+            retriever.close()
+
+            # Tier 1 — load structured facts as grouped dict
             with MemoryDatabase(db_path=SQLITE_PATH) as db:
-                db.init_schema()   # no-op if schema already exists
-                confirmed_facts = db.get_confirmed_facts(customer_id)
+                db.init_schema()
+                customer_facts = db.get_all_facts_grouped(customer_id)
+
+            state["customer_facts"]      = customer_facts
+            state["memory_prompt_block"] = context_result["prompt_block"]
+            state["dynamic_context"]     = [
+                r["document"] for r in context_result["relevant_chunks"]
+                if r.get("document")
+            ]
+            state["session_summaries"]   = [
+                s["document"] for s in context_result["session_summaries"]
+                if s.get("document")
+            ]
+            logger.info(
+                f"✅ Memory loaded for {customer_id}: "
+                f"{len(customer_facts)} fact groups | "
+                f"{len(state['dynamic_context'])} chunks | "
+                f"{len(state['session_summaries'])} summaries"
+            )
         except Exception as e:
-            logger.error(f"❌ SQLite load failed: {e}")
-            confirmed_facts = {}
-
-        state["confirmed_facts"] = confirmed_facts
-        logger.info(f"✅ SQLite: {len(confirmed_facts)} fact groups for {customer_id}")
-
-        # ----------------------------------------------------------------
-        # Tier 2 — ChromaDB: semantic search on user query
-        # FIX #3 — results use key "document", not "text"
-        # ----------------------------------------------------------------
-        dynamic_context: List[str] = []
-        if user_input:
-            try:
-                vs = VectorStore(persist_path=CHROMA_PATH)
-
-                # Embed current user message for future retrieval
-                vs.add_chunk(
-                    customer_id=customer_id,
-                    session_id=session_id,
-                    text=user_input[:500],
-                    topic_tag="user_input",
-                )
-
-                # Semantic search scoped to this customer
-                results = vs.search(
-                    customer_id=customer_id,
-                    query_text=user_input,
-                    n_results=VECTOR_SEARCH_TOP_K,
-                )
-
-                # FIX #3: key is "document", NOT "text"
-                dynamic_context = [
-                    r["document"] for r in results if r.get("document")
-                ]
-                logger.info(f"✅ ChromaDB: {len(dynamic_context)} chunks retrieved")
-            except Exception as e:
-                logger.warning(f"⚠️  ChromaDB load failed (non-fatal): {e}")
-
-        state["dynamic_context"]  = dynamic_context
-        state["session_summaries"] = []   # populated on demand; summaries go to ChromaDB
+            logger.error(f"❌ MemoryRetriever failed: {e}")
+            state["customer_facts"]      = {}
+            state["memory_prompt_block"] = ""
+            state["dynamic_context"]     = []
+            state["session_summaries"]   = []
 
         return state
 
@@ -254,7 +249,7 @@ async def router(state: SessionState) -> SessionState:
     """
     try:
         user_input      = state.get("user_input", "")
-        confirmed_facts = state.get("confirmed_facts", {})
+        customer_facts  = state.get("customer_facts", {})
         dynamic_context = state.get("dynamic_context", [])
 
         if not user_input:
@@ -264,7 +259,7 @@ async def router(state: SessionState) -> SessionState:
             return state
 
         # Prepare context strings for the prompt
-        facts_summary   = json.dumps(confirmed_facts, indent=2) if confirmed_facts else "No confirmed facts"
+        facts_summary   = json.dumps(customer_facts, indent=2) if customer_facts else "No facts on file yet"
         context_summary = "\n".join(dynamic_context[:3]) if dynamic_context else "No relevant context"
         messages        = state.get("messages") or []
         # Exclude the current message (last item) from history shown to router
@@ -286,11 +281,11 @@ async def router(state: SessionState) -> SessionState:
         state["router_reasoning"]   = decision.reasoning
         state["router_confidence"]  = decision.confidence
 
-        # If routing to mismatch handler, run a second LLM pass for conflict details
+        # If routing to mismatch handler, run conflict extraction
         if decision.next_handler == "handle_mismatch_confirmation":
             logger.info("🔍 Running conflict extraction pass …")
             mismatches = await extract_conflicts_with_llm(
-                user_input, confirmed_facts, dynamic_context
+                user_input, customer_facts, dynamic_context
             )
             state["mismatched_fields"] = mismatches
             state["has_mismatch"]      = bool(mismatches)
@@ -353,39 +348,16 @@ async def end_session(state: SessionState) -> SessionState:
             "timestamp": datetime.now().isoformat(),
         })
 
-        # ----------------------------------------------------------------
-        # FIX #1 — assign `messages` BEFORE the loop that uses it
-        # ----------------------------------------------------------------
         messages: List[Dict[str, str]] = state["messages"]
 
         # ----------------------------------------------------------------
-        # 2. Store all messages session-wise to ChromaDB
-        # ----------------------------------------------------------------
-        try:
-            vs = VectorStore(persist_path=CHROMA_PATH)
-            stored = 0
-            for msg in messages:
-                role    = msg.get("role", "unknown")
-                content = msg.get("content", "")
-                if not content:
-                    continue
-                vs.add_chunk(
-                    customer_id=customer_id,
-                    session_id=session_id,
-                    text=content[:500],
-                    topic_tag=f"{role}_message",
-                )
-                stored += 1
-            logger.info(f"✅ ChromaDB: {stored} messages stored for session {session_id}")
-        except Exception as e:
-            logger.warning(f"⚠️  ChromaDB message persistence failed: {e}")
-
-        # ----------------------------------------------------------------
-        # 3. Create and store session summary
+        # 2. Store session summary to ChromaDB (cross-session recall only)
+        #    Raw message turns are NOT stored — only memory-relevant contextual
+        #    info is written to ChromaDB (by handle_memory_update handler).
         # ----------------------------------------------------------------
         if len(messages) >= 2:
             try:
-                # Compact summary: final response + turn count
+                vs = VectorStore(persist_path=CHROMA_PATH)
                 summary_text = (
                     f"Session {session_id} | {len(messages)} turns | "
                     f"Last response: {agent_response[:300]}"

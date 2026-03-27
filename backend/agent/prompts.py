@@ -24,69 +24,52 @@ DATABASE_SCHEMA_REFERENCE = """
 CUSTOMER MEMORY DATABASE SCHEMA
 ================================
 
-All customer data is stored in a single 'customer_memory' table with the following fields.
-When the agent needs to store information, refer to this schema to know what fields are available.
+All customer data is stored in a single 'customer_memory' table.
+When storing information, use the exact field names shown below.
 
 📋 IDENTITY FIELDS:
   - full_name (string): Customer's complete full name
-    Status: full_name_status ("pending" or "confirmed")
   - date_of_birth (string): Date in ISO format (YYYY-MM-DD)
-    Status: date_of_birth_status ("pending" or "confirmed")
-  - phone (string): Primary contact phone number (10-digit or with country code)
-    Status: phone_status ("pending" or "confirmed")
+  - phone (string): Primary contact phone number
 
 🏠 ADDRESS FIELDS:
   - address (string): Full residential address
   - city (string): City name
   - state (string): State/Province name
   - pincode (string): Postal/ZIP code
-    Status: address_status (all address fields use this single status)
 
 💼 EMPLOYMENT FIELDS:
   - employer_name (string): Name of current employer/company
   - job_title (string): Current job title/designation
   - years_at_job (decimal): Years worked at current position (e.g., 5.5)
-    Status: employment_status ("pending" or "confirmed")
 
 💰 INCOME & FINANCIAL FIELDS:
   - monthly_income (decimal): Monthly income in rupees
-    Status: income_status ("pending" or "confirmed")
-  - income_type (string): Type of income - "salaried", "self_employed", or "rental"
+  - income_type (string): "salaried", "self_employed", or "rental"
   - cibil_score (integer): Credit CIBIL score (typically 300-900)
-    Status: cibil_status ("pending" or "confirmed")
-  - total_existing_emi_monthly (decimal): Total EMI payment per month
+  - total_existing_emi_monthly (decimal): Total monthly EMI payments
   - number_of_active_loans (integer): Count of active loans
-    Status: loans_status (applies to EMI and active loans)
 
 🏦 LOAN REQUEST FIELDS:
-  - requested_loan_type (string): Type of loan - "home", "auto", or "personal"
+  - requested_loan_type (string): "home", "auto", or "personal"
   - requested_loan_amount (decimal): Requested loan amount in rupees
   - requested_tenure_months (integer): Loan tenure in months
   - loan_purpose (string): Purpose of the loan
-    Status: loan_request_status ("pending" or "confirmed")
 
 👥 CO-APPLICANT FIELDS:
   - coapplicant_name (string): Co-applicant's full name (if any)
-  - coapplicant_relation (string): Relationship - "spouse", "sibling", or "parent"
+  - coapplicant_relation (string): "spouse", "sibling", or "parent"
   - coapplicant_income (decimal): Co-applicant's monthly income
-    Status: coapplicant_status ("pending" or "confirmed")
 
 📱 APPLICATION FIELDS:
-  - application_status (string): Status of application
+  - application_status (string): Business state of the application
     Values: "incomplete", "complete", "processing", "approved", "rejected", "on_hold"
-  - documents_submitted (string): Comma-separated list of submitted documents
-    Examples: "aadhar,pan,income_proof" or "bank_statement,payslip"
+  - documents_submitted (string): Comma-separated list e.g. "aadhar,pan,income_proof"
 
 🗓️ METADATA FIELDS:
   - customer_id (string): Unique customer identifier
   - created_at (datetime): When customer record was created
   - last_updated (datetime): When customer record was last updated
-
-STATUS FIELD RULES:
-  - Each field group has a corresponding _status field
-  - Values: "pending" (mentioned but not confirmed) or "confirmed" (verified by customer)
-  - When storing new information, default status is "pending"
-  - Upgrade to "confirmed" when customer explicitly confirms
 """
 
 # ============================================================================
@@ -102,10 +85,10 @@ Your job is to analyze customer input and route it to the appropriate handler ba
 
 ROUTING RULES:
 
-**handle_mismatch_confirmation**: User provided info that CONFLICTS with confirmed facts
-  - User says something different from what was previously confirmed
+**handle_mismatch_confirmation**: User provided info that CONFLICTS with existing facts
+  - User says something different from what was previously recorded
   - Action: Politely ask user to verify/confirm which value is correct with historical context
-  - Example: System has income=$50k, user says "I earn $75k now" → CONFLICT
+  - Example: System has income=₹50k, user says "I earn ₹75k now" → CONFLICT
 
 **handle_memory_update**: User is providing NEW INFORMATION (no conflicts)
   - PRIORITY: If user EXPLICITLY STATES any factual information, this is handle_memory_update
@@ -125,7 +108,7 @@ ROUTING RULES:
     * "Am I eligible for a 25L loan?"
     * "What's the interest rate?"
     * "How much can I borrow?"
-  - Action: Answer using confirmed facts and available context
+  - Action: Answer using known facts and available context
 
 **handle_general**: General conversation, small talk, or unclear intent
   - General chat not related to loan/profile info
@@ -139,14 +122,14 @@ ROUTING RULES:
 
 DECISION LOGIC:
 1. FIRST: Check if user is EXPLICITLY STATING information (name, income, employment, etc.) → handle_memory_update
-2. SECOND: Check if user input CONFLICTS with confirmed facts → handle_mismatch_confirmation
+2. SECOND: Check if user input CONFLICTS with existing customer facts → handle_mismatch_confirmation
 3. THIRD: Check if user is ASKING a question → handle_query
 4. DEFAULT: Falls back to handle_general
 
 CONFLICT DETECTION:
-- Compare user input against confirmed_facts
-- If user mentions a value that differs from confirmed data → route to handle_mismatch_confirmation
-- Extract old_value (from confirmed facts) vs new_value (from user input)"""
+- Compare user input against customer_facts
+- If user mentions a value that differs from stored data → route to handle_mismatch_confirmation
+- Extract old_value (from stored facts) vs new_value (from user input)"""
 
 
 ROUTER_USER_PROMPT = """Analyze this customer input carefully and route to the correct handler.
@@ -158,10 +141,10 @@ PREVIOUS CONVERSATION:
 
 CUSTOMER SAID: {user_input}
 
-CONFIRMED FACTS (Previously Verified Data):
+KNOWN CUSTOMER FACTS:
 {facts_summary}
 
-AVAILABLE CONTEXT (Historical Information):
+RELEVANT CONTEXT (Historical Information):
 {context_summary}
 
 ---
@@ -170,7 +153,7 @@ ANALYSIS STEPS:
 1. Does the customer EXPLICITLY STATE any information? (name, income, employment, etc.)
    → If YES → route to handle_memory_update (they're providing new facts)
    
-2. If providing info, does it CONFLICT with confirmed facts?
+2. If providing info, does it CONFLICT with existing facts?
    → If YES → route to handle_mismatch_confirmation
    → If NO → route to handle_memory_update
    
@@ -258,10 +241,9 @@ IMPORTANT: When storing customer information, map it to the following database f
 {DATABASE_SCHEMA_REFERENCE}
 
 For each field you update:
-1. Set status to "pending" (default for new information from customer)
-2. Use exact field names as shown above
-3. Validate data types (numbers, dates, strings)
-4. Normalize values (trim spaces, capitalize names, format phone numbers)
+1. Use exact field names as shown above
+2. Validate data types (numbers, dates, strings)
+3. Normalize values (trim spaces, capitalize names, format phone numbers)
 """
 
 MEMORY_CONFLICT_TEMPLATE = """I've noticed some differences in your information:
@@ -384,15 +366,14 @@ DATABASE SCHEMA AVAILABLE:
 CLASSIFICATION RULES:
 1. For each piece of information the customer provides, identify the matching field from the schema
 2. Determine the appropriate value type (string, decimal, integer)
-3. Indicate if this is new information (status="pending") or confirmed (status="confirmed")
-4. Map to existing fields when possible, or flag as contextual if it doesn't fit the schema
+3. Map to existing fields when possible, or flag as contextual if it doesn't fit the schema
 
 EXAMPLES OF FIELD MATCHING:
-- "I earn 50,000 per month" → monthly_income = 50000, income_status = "pending"
-- "I work at Tech Corp as Senior Engineer for 5 years" → employer_name = "Tech Corp", job_title = "Senior Engineer", years_at_job = 5, employment_status = "pending"
-- "I want a home loan of 25 lakhs" → requested_loan_type = "home", requested_loan_amount = 2500000, loan_request_status = "pending"
-- "My name is Rajesh Kumar" → full_name = "Rajesh Kumar", full_name_status = "pending"
-- "I have 2 active loans with 15k EMI" → number_of_active_loans = 2, total_existing_emi_monthly = 15000, loans_status = "pending"
+- "I earn 50,000 per month" → monthly_income = 50000
+- "I work at Tech Corp as Senior Engineer for 5 years" → employer_name = "Tech Corp", job_title = "Senior Engineer", years_at_job = 5
+- "I want a home loan of 25 lakhs" → requested_loan_type = "home", requested_loan_amount = 2500000
+- "My name is Rajesh Kumar" → full_name = "Rajesh Kumar"
+- "I have 2 active loans with 15k EMI" → number_of_active_loans = 2, total_existing_emi_monthly = 15000
 """
 
 FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information against the database schema.
@@ -403,9 +384,8 @@ CUSTOMER STATEMENT:
 For each piece of information mentioned, provide:
 1. Field name (from the schema above)
 2. Field value (normalized/cleaned)
-3. Field status ("pending" for new information)
-4. Data type (string, integer, decimal)
-5. Confidence level (0.0-1.0)
+3. Data type (string, integer, decimal)
+4. Confidence level (0.0-1.0)
 
 If information doesn't match any schema field, indicate it as "contextual" for ChromaDB storage."""
 
@@ -431,21 +411,20 @@ EXTRACTION INSTRUCTIONS:
 2. Map each to the corresponding database field from the schema
 3. Normalize the value (clean, type-cast, validate format)
 4. Provide confidence level (0.0-1.0)
-5. Indicate the appropriate status (typically "pending" for new information)
 
 EXTRACTION EXAMPLES:
 - "I earn 50,000 per month in my salaried job" 
-  → monthly_income: 50000, income_status: "pending"
-  → income_type: "salaried", income_status: "pending"
+  → monthly_income: 50000
+  → income_type: "salaried"
 
 - "I'm Rajesh Kumar, live in Bangalore" 
-  → full_name: "Rajesh Kumar", full_name_status: "pending"
-  → city: "Bangalore", address_status: "pending"
+  → full_name: "Rajesh Kumar"
+  → city: "Bangalore"
 
 - "I need a home loan for 25 lakhs over 20 years"
-  → requested_loan_type: "home", loan_request_status: "pending"
-  → requested_loan_amount: 2500000, loan_request_status: "pending"
-  → requested_tenure_months: 240, loan_request_status: "pending"
+  → requested_loan_type: "home"
+  → requested_loan_amount: 2500000
+  → requested_tenure_months: 240
 
 For each entity, provide:
 - field_name: The database field name
@@ -453,7 +432,6 @@ For each entity, provide:
 - normalized_value: Cleaned/processed value
 - data_type: string, integer, or decimal
 - confidence: 0.0-1.0
-- status: Typically "pending" for new information
 """
 
 ENTITY_EXTRACTION_USER_PROMPT = """Extract all entities from this customer statement and map to database fields.

@@ -98,55 +98,63 @@ class MemoryRetriever:
             memory = self.db.load_customer_memory(customer_id)
             if memory:
                 customer_found = True
-                # Build facts from the flat schema
                 lines = []
                 # Identity
-                if memory.full_name and memory.full_name_status:
-                    lines.append(f"  • Full Name: {memory.full_name} [{memory.full_name_status.upper()}]")
-                if memory.email and memory.email_status:
-                    lines.append(f"  • Email: {memory.email} [{memory.email_status.upper()}]")
-                if memory.phone and memory.phone_status:
-                    lines.append(f"  • Phone: {memory.phone} [{memory.phone_status.upper()}]")
+                if memory.full_name:
+                    lines.append(f"  • Full Name: {memory.full_name}")
+                if memory.phone:
+                    lines.append(f"  • Phone: {memory.phone}")
+                if memory.date_of_birth:
+                    lines.append(f"  • Date of Birth: {memory.date_of_birth}")
                 # Address
-                if memory.city and memory.city_status:
-                    lines.append(f"  • City: {memory.city} [{memory.city_status.upper()}]")
-                if memory.state and memory.state_status:
-                    lines.append(f"  • State: {memory.state} [{memory.state_status.upper()}]")
+                if memory.city:
+                    lines.append(f"  • City: {memory.city}")
+                if memory.state:
+                    lines.append(f"  • State: {memory.state}")
+                if memory.address:
+                    lines.append(f"  • Address: {memory.address}")
+                if memory.pincode:
+                    lines.append(f"  • Pincode: {memory.pincode}")
                 # Employment
-                if memory.employer_name and memory.employer_name_status:
-                    lines.append(f"  • Employer: {memory.employer_name} [{memory.employer_name_status.upper()}]")
-                if memory.job_title and memory.job_title_status:
-                    lines.append(f"  • Job Title: {memory.job_title} [{memory.job_title_status.upper()}]")
-                if memory.total_work_experience_years and memory.total_work_experience_years_status:
-                    lines.append(f"  • Work Experience: {memory.total_work_experience_years} years [{memory.total_work_experience_years_status.upper()}]")
+                if memory.employer_name:
+                    lines.append(f"  • Employer: {memory.employer_name}")
+                if memory.job_title:
+                    lines.append(f"  • Job Title: {memory.job_title}")
+                if memory.years_at_job:
+                    lines.append(f"  • Years at Job: {memory.years_at_job}")
                 # Income
-                if memory.monthly_income and memory.monthly_income_status:
-                    lines.append(f"  • Monthly Income: ₹{memory.monthly_income} [{memory.monthly_income_status.upper()}]")
-                if memory.annual_income and memory.annual_income_status:
-                    lines.append(f"  • Annual Income: ₹{memory.annual_income} [{memory.annual_income_status.upper()}]")
+                if memory.monthly_income:
+                    lines.append(f"  • Monthly Income: ₹{memory.monthly_income}")
+                if memory.income_type:
+                    lines.append(f"  • Income Type: {memory.income_type}")
                 # Credit
-                if memory.cibil_score and memory.cibil_score_status:
-                    lines.append(f"  • CIBIL Score: {memory.cibil_score} [{memory.cibil_score_status.upper()}]")
-                if memory.total_existing_emi_monthly and memory.total_existing_emi_monthly_status:
-                    lines.append(f"  • Existing EMI (monthly): ₹{memory.total_existing_emi_monthly} [{memory.total_existing_emi_monthly_status.upper()}]")
-                if memory.number_of_active_loans and memory.number_of_active_loans_status:
-                    lines.append(f"  • Active Loans: {memory.number_of_active_loans} [{memory.number_of_active_loans_status.upper()}]")
+                if memory.cibil_score:
+                    lines.append(f"  • CIBIL Score: {memory.cibil_score}")
+                if memory.total_existing_emi_monthly:
+                    lines.append(f"  • Existing EMI (monthly): ₹{memory.total_existing_emi_monthly}")
+                if memory.number_of_active_loans is not None:
+                    lines.append(f"  • Active Loans: {memory.number_of_active_loans}")
                 # Loan Request
-                if memory.requested_loan_amount and memory.requested_loan_amount_status:
-                    lines.append(f"  • Loan Amount Requested: ₹{memory.requested_loan_amount} [{memory.requested_loan_amount_status.upper()}]")
-                if memory.requested_loan_type and memory.requested_loan_type_status:
-                    lines.append(f"  • Loan Type: {memory.requested_loan_type} [{memory.requested_loan_type_status.upper()}]")
-                if memory.requested_tenure_months and memory.requested_tenure_months_status:
-                    lines.append(f"  • Tenure: {memory.requested_tenure_months} months [{memory.requested_tenure_months_status.upper()}]")
+                if memory.requested_loan_amount:
+                    lines.append(f"  • Loan Amount Requested: ₹{memory.requested_loan_amount}")
+                if memory.requested_loan_type:
+                    lines.append(f"  • Loan Type: {memory.requested_loan_type}")
+                if memory.requested_tenure_months:
+                    lines.append(f"  • Tenure: {memory.requested_tenure_months} months")
+                if memory.loan_purpose:
+                    lines.append(f"  • Loan Purpose: {memory.loan_purpose}")
                 # Co-applicant
-                if memory.co_applicant_name and memory.co_applicant_name_status:
-                    lines.append(f"  • Co-applicant: {memory.co_applicant_name} [{memory.co_applicant_name_status.upper()}]")
-                if memory.co_applicant_monthly_income and memory.co_applicant_monthly_income_status:
-                    lines.append(f"  • Co-applicant Income: ₹{memory.co_applicant_monthly_income} [{memory.co_applicant_monthly_income_status.upper()}]")
+                if memory.coapplicant_name:
+                    lines.append(f"  • Co-applicant: {memory.coapplicant_name}")
+                if memory.coapplicant_relation:
+                    lines.append(f"  • Co-applicant Relation: {memory.coapplicant_relation}")
+                if memory.coapplicant_income:
+                    lines.append(f"  • Co-applicant Income: ₹{memory.coapplicant_income}")
                 # Application
-                if memory.application_status:
-                    lines.append(f"  • Application Status: {memory.application_status.upper()}")
-                
+                lines.append(f"  • Application Status: {memory.application_status.upper()}")
+                if memory.documents_submitted:
+                    lines.append(f"  • Documents: {memory.documents_submitted}")
+
                 structured_facts = "\n".join(lines) if lines else "No factual data recorded yet."
             else:
                 structured_facts = "New customer — no structured data yet."
@@ -237,42 +245,41 @@ class MemoryRetriever:
 
         return "\n".join(sections)
 
-    def get_confirmed_facts_summary(self, customer_id: str) -> str:
+    def get_facts_summary(self, customer_id: str) -> str:
         """
-        Get a brief summary of only CONFIRMED facts.
-        Used for conflict detection — 'what do we know for certain?'
+        Get a brief summary of all known facts for a customer.
+        Used for conflict detection — 'what do we know about this customer?'
 
         Returns:
-            A concise string listing all confirmed facts, or empty string.
+            A concise string listing all known facts, or empty string.
         """
         try:
             memory = self.db.load_customer_memory(customer_id)
             if not memory:
                 return ""
 
-            confirmed = []
+            parts = []
+            if memory.monthly_income:
+                parts.append(f"income=₹{memory.monthly_income}")
+            if memory.cibil_score:
+                parts.append(f"cibil={memory.cibil_score}")
+            if memory.requested_loan_amount:
+                parts.append(f"loan_amount=₹{memory.requested_loan_amount}")
+            if memory.requested_loan_type:
+                parts.append(f"loan_type={memory.requested_loan_type}")
+            if memory.full_name:
+                parts.append(f"name={memory.full_name}")
+            if memory.city:
+                parts.append(f"city={memory.city}")
+            if memory.employer_name:
+                parts.append(f"employer={memory.employer_name}")
+            if memory.coapplicant_name:
+                parts.append(f"co_applicant={memory.coapplicant_name}")
 
-            # Helper to add confirmed fields
-            def _add_if_confirmed(value, label: str, unit: str = "", status: str = "pending"):
-                if value and status == "confirmed":
-                    val = f"{unit}{value}" if unit else str(value)
-                    confirmed.append(f"{label}={val}")
-
-            _add_if_confirmed(memory.monthly_income, "income", "₹", memory.monthly_income_status)
-            _add_if_confirmed(memory.annual_income, "annual_income", "₹", memory.annual_income_status)
-            _add_if_confirmed(memory.cibil_score, "cibil", "", memory.cibil_score_status)
-            _add_if_confirmed(memory.total_existing_emi_monthly, "emi", "₹", memory.total_existing_emi_monthly_status)
-            _add_if_confirmed(memory.requested_loan_amount, "loan_amount", "₹", memory.requested_loan_amount_status)
-            _add_if_confirmed(memory.requested_loan_type, "loan_type", "", memory.requested_loan_type_status)
-            _add_if_confirmed(memory.full_name, "name", "", memory.full_name_status)
-            _add_if_confirmed(memory.city, "city", "", memory.city_status)
-            _add_if_confirmed(memory.employer_name, "employer", "", memory.employer_name_status)
-            _add_if_confirmed(memory.co_applicant_name, "co_applicant", "", memory.co_applicant_name_status)
-
-            return " | ".join(confirmed) if confirmed else ""
+            return " | ".join(parts) if parts else ""
 
         except Exception as e:
-            logger.error(f"Failed to get confirmed facts for {customer_id}: {e}")
+            logger.error(f"Failed to get facts summary for {customer_id}: {e}")
             return ""
 
     def close(self):

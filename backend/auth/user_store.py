@@ -4,6 +4,7 @@ Handles user registration, login, and session management.
 """
 
 import sys
+import json
 import sqlite3
 from pathlib import Path
 from typing import Optional, Tuple
@@ -76,9 +77,16 @@ class UserDatabase:
                 last_activity TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 is_active INTEGER DEFAULT 1,
+                messages TEXT DEFAULT '[]',
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
+
+        # Migrate existing table: add messages column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE user_sessions ADD COLUMN messages TEXT DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # Indexes for frequent queries
         cursor.execute(
@@ -202,8 +210,9 @@ class UserDatabase:
                 """
                 INSERT INTO user_sessions (
                     session_id, user_id, username, customer_id,
-                    logged_in_at, last_activity, expires_at, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    logged_in_at, last_activity, expires_at, is_active,
+                    messages
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -214,6 +223,7 @@ class UserDatabase:
                     now.isoformat(),
                     expires_at.isoformat(),
                     1,
+                    json.dumps([]),
                 ),
             )
 
@@ -235,6 +245,7 @@ class UserDatabase:
                 last_activity=now,
                 expires_at=expires_at,
                 is_active=True,
+                messages=[],
             )
 
             return True, session, None
@@ -323,6 +334,12 @@ class UserDatabase:
                 self.connection.commit()
                 return None
 
+            raw_messages = session_data.get("messages") or "[]"
+            try:
+                messages = json.loads(raw_messages)
+            except (json.JSONDecodeError, TypeError):
+                messages = []
+
             return UserSession(
                 session_id=session_data["session_id"],
                 user_id=session_data["user_id"],
@@ -336,6 +353,7 @@ class UserDatabase:
                 ),
                 expires_at=expires_at,
                 is_active=bool(session_data["is_active"]),
+                messages=messages,
             )
 
         except Exception as e:
@@ -366,6 +384,69 @@ class UserDatabase:
         except Exception as e:
             print(f"❌ Failed to logout: {e}")
             return False
+
+    def save_session_messages(
+        self, session_id: str, messages: list
+    ) -> bool:
+        """
+        Persist the conversation messages list for a session.
+
+        Serialises messages to JSON and writes to the messages column of
+        user_sessions. Safe to call after every graph turn.
+
+        Args:
+            session_id: The session whose messages to save.
+            messages:   List of message dicts (role/content/timestamp).
+
+        Returns:
+            True on success, False on failure.
+        """
+        if not self.connection:
+            self.connect()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE user_sessions SET messages = ? WHERE session_id = ?",
+                (json.dumps(messages), session_id),
+            )
+            self.connection.commit()
+            return True
+        except Exception as e:
+            print(f"❌ Failed to save session messages: {e}")
+            return False
+
+    def get_session_messages(self, session_id: str) -> list:
+        """
+        Load the conversation messages list for a session.
+
+        Reads the messages column from user_sessions and deserialises JSON.
+        Returns an empty list if the session doesn't exist or has no messages.
+
+        Args:
+            session_id: The session to load messages for.
+
+        Returns:
+            List of message dicts, or [] on error / not found.
+        """
+        if not self.connection:
+            self.connect()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT messages FROM user_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return []
+            raw = dict(row).get("messages") or "[]"
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        except Exception as e:
+            print(f"❌ Failed to get session messages: {e}")
+            return []
 
     def __enter__(self):
         """Context manager entry."""

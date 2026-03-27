@@ -44,9 +44,10 @@ class SessionState(TypedDict, total=False):
     # =============================
     # MEMORY TIER 1 & 2 (loaded in load_memory node)
     # =============================
-    confirmed_facts: Dict[str, Any]  # From SQLite (monthly_income, cibil_score, etc.)
-    dynamic_context: List[str]  # Top-K semantic matches from ChromaDB
-    session_summaries: List[str]  # Chronological session summaries from ChromaDB
+    customer_facts: Dict[str, Any]    # All known facts from SQLite, grouped by category
+    dynamic_context: List[str]        # Top-K semantic matches from ChromaDB
+    session_summaries: List[str]      # Chronological session summaries from ChromaDB
+    memory_prompt_block: Optional[str]  # Full 3-tier formatted context for LLM injection
     
     # =============================
     # ENTITY EXTRACTION & INTENT DETECTION

@@ -26,13 +26,11 @@ from agent.prompts import (
 )
 from agent.helpers import classify_fields_with_llm, create_llm
 from agent.schemas import FieldClassification
-from memory.sqlite_store import MemoryDatabase, FIELD_TO_STATUS_COLUMN, VALID_COLUMNS
+from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from config import SQLITE_PATH, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
-
-
 # ============================================================================
 # FIELD VALIDATION HELPERS
 # ============================================================================
@@ -191,7 +189,6 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                     sqlite_results = db.batch_update_fields(
                         customer_id=customer_id,
                         fields=valid_schema,
-                        status="pending",
                     )
                 ok = sum(1 for v in sqlite_results.values() if v)
                 logger.info(f"   💾 SQLite: {ok}/{len(valid_schema)} fields written")
@@ -296,7 +293,7 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
     try:
         mismatches      = state.get("mismatched_fields", {})
         dynamic_context = state.get("dynamic_context", [])
-        confirmed_facts = state.get("confirmed_facts", {})
+        customer_facts  = state.get("customer_facts", {})
 
         logger.info(f"🔍 Mismatch handler | {len(mismatches)} conflict(s)")
 
@@ -330,7 +327,7 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
             if any(d in ctx_text for d in days) or "ago" in ctx_text:
                 historical_context = ctx_text[:200]
 
-        customer_profile = json.dumps(confirmed_facts, indent=2) if confirmed_facts else "{}"
+        customer_profile = json.dumps(customer_facts, indent=2) if customer_facts else "{}"
 
         llm   = create_llm(temperature=0.4)
         chain = MISMATCH_VERIFICATION_PROMPT | llm
@@ -371,19 +368,20 @@ async def handle_query(state: SessionState) -> SessionState:
     Low temperature for factual accuracy.
     """
     try:
-        user_input      = state.get("user_input", "")
-        facts           = state.get("confirmed_facts", {})
-        context         = state.get("dynamic_context", [])[:3]
+        user_input       = state.get("user_input", "")
+        memory_block     = state.get("memory_prompt_block") or ""
+        customer_facts   = state.get("customer_facts", {})
+        context          = state.get("dynamic_context", [])[:3]
 
-        facts_summary   = json.dumps(facts, indent=2) if facts else "No confirmed facts on file yet."
-        context_summary = "\n".join(context) if context else "No additional context available."
+        facts_summary    = json.dumps(customer_facts, indent=2) if customer_facts else "No customer profile yet."
+        context_summary  = memory_block if memory_block else "\n".join(context) if context else "No relevant context."
 
         llm   = create_llm(temperature=0.2)
         chain = QUERY_ANSWER_CHAT_PROMPT | llm
 
         response = await chain.ainvoke({
-            "user_input":     user_input,
-            "facts_summary":  facts_summary,
+            "user_input":      user_input,
+            "facts_summary":   facts_summary,
             "context_summary": context_summary,
         })
 
@@ -413,18 +411,19 @@ async def handle_general(state: SessionState) -> SessionState:
     """
     try:
         user_input      = state.get("user_input", "")
-        facts           = state.get("confirmed_facts", {})
+        memory_block    = state.get("memory_prompt_block") or ""
+        customer_facts  = state.get("customer_facts", {})
         context         = state.get("dynamic_context", [])[:2]
 
-        facts_summary   = json.dumps(facts, indent=2) if facts else "No customer profile yet."
-        context_summary = "\n".join(context) if context else "No previous context."
+        facts_summary   = json.dumps(customer_facts, indent=2) if customer_facts else "No customer profile yet."
+        context_summary = memory_block if memory_block else "\n".join(context) if context else "No previous context."
 
         llm   = create_llm(temperature=0.7)
         chain = GENERAL_RESPONSE_PROMPT | llm
 
         response = await chain.ainvoke({
-            "user_input":     user_input,
-            "facts_summary":  facts_summary,
+            "user_input":      user_input,
+            "facts_summary":   facts_summary,
             "context_summary": context_summary,
         })
 
