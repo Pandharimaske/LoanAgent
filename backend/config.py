@@ -54,6 +54,13 @@ Path(CHROMA_PATH).mkdir(parents=True, exist_ok=True)
 DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "")
 
 # ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+JWT_EXPIRES_HOURS = int(os.getenv("JWT_EXPIRES_HOURS", "24"))
+JWT_SECRET = os.getenv("JWT_SECRET", "")  # Must be set in production
+
+# ============================================================================
 # MEMORY THRESHOLDS & LIMITS
 # ============================================================================
 
