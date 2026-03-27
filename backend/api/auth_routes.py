@@ -10,6 +10,7 @@ from datetime import datetime
 
 from auth.models import UserLogin, UserResponse, UserSession
 from auth.user_store import UserDatabase
+from auth.utils import TokenManager
 from config import SQLITE_PATH
 
 # Create router
@@ -53,11 +54,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Login response with session token."""
+    """Login response with session token and JWT."""
     success: bool
     user_id: str
     email: str
     session_id: str
+    jwt_token: str
     expires_at: str
     customer_id: Optional[str] = None
     message: str
@@ -179,11 +181,25 @@ async def login(
                 detail=error or "Login failed",
             )
 
+        # Generate JWT token
+        try:
+            jwt_token = TokenManager.create_jwt_token(
+                user_id=session.user_id,
+                email=session.email,
+                customer_id=session.customer_id,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Token generation error: {str(e)}",
+            )
+
         return LoginResponse(
             success=True,
             user_id=session.user_id,
             email=session.email,
             session_id=session.session_id,
+            jwt_token=jwt_token,
             expires_at=session.expires_at.isoformat(),
             customer_id=session.customer_id,
             message=f"Login successful. Session valid until {session.expires_at.isoformat()}",
