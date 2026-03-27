@@ -12,89 +12,84 @@ from datetime import datetime
 class SessionState(TypedDict, total=False):
     """
     Complete session state for LoanAgent orchestration.
-    
-    Router Node decides the flow based on:
-    - detect_intent: What is user asking? (update_info, query_loan, general_chat)
-    - has_mismatch: Any conflicts between extracted and confirmed facts?
-    
-    Then routes to appropriate handler:
-    - handle_memory_update: User provided new/conflicting info
-    - handle_query: User asking questions about loan/status
-    - handle_general: General conversation/clarification
+
+    Flow:
+      check_token_threshold → load_memory → extract_memory_node → router
+        → handle_mismatch_confirmation | handle_query | handle_general
+        → end_session
     """
-    
+
     # =============================
     # SESSION METADATA
     # =============================
     session_id: str
-    customer_id: str  # Single ID - represents the customer
-    started_at: datetime
-    
+    customer_id: str
+    session_end_time: Optional[str]   # set by end_session node
+
     # =============================
     # INPUT
     # =============================
     user_input: str
-    language: str  # 'en' or 'hi'
-    
+    language: str   # 'en' / 'hi' — reserved for multilingual support
+
     # =============================
-    # CONVERSATION HISTORY (Message Buffer)
+    # CONVERSATION HISTORY
     # =============================
-    messages: List[Dict[str, str]]  # Conversation history: [{"role": "user"|"assistant", "content": "..."}, ...]
-    
+    messages: List[Dict[str, str]]  # [{\"role\": \"user\"|\"assistant\", \"content\": \"...\"}, ...]
+
     # =============================
-    # MEMORY TIER 1 & 2 (loaded in load_memory node)
+    # MEMORY (loaded by load_memory, refreshed by extract_memory_node)
     # =============================
-    customer_facts: Dict[str, Any]    # All known facts from SQLite, grouped by category
-    dynamic_context: List[str]        # Top-K semantic matches from ChromaDB
-    session_summaries: List[str]      # Chronological session summaries from ChromaDB
-    memory_prompt_block: Optional[str]  # Full 3-tier formatted context for LLM injection
-    
+    customer_facts: Dict[str, Any]      # Structured facts from SQLite, grouped by category
+    dynamic_context: List[str]          # Top-K semantic chunks from ChromaDB
+    session_summaries: List[str]        # Past session summaries from ChromaDB
+    memory_prompt_block: Optional[str]  # Formatted 3-tier context block injected into LLMs
+
     # =============================
-    # ENTITY EXTRACTION & INTENT DETECTION
+    # EXTRACTION & CONFLICT DETECTION (set by extract_memory_node)
     # =============================
-    extracted_entities: Dict[str, Any]  # Newly extracted structured data from user input
-    detected_intent: str  # 'update_info', 'query_loan', 'general_chat', 'ask_application_status'
-    intent_confidence: float  # 0.0-1.0
-    
+    memory_mismatches: Dict[str, Dict[str, Any]]  # {field: {old_value, new_value, confidence, explanation}}
+
     # =============================
-    # CONFLICT/MISMATCH DETECTION (done in extract_entities)
+    # HUMAN-IN-THE-LOOP SAVE
     # =============================
-    has_mismatch: bool  # True if extracted differs from confirmed
-    mismatched_fields: Dict[str, Dict[str, Any]]  # {field: {existing, new, confidence}}
-    
+    pending_fields: Dict[str, Any]    # Extracted financial facts awaiting user confirmation
+    response_type: str                # "text" | "options" | "save_confirmation" | "mismatch_confirmation"
+    response_options: List[str]       # Quick-reply chips to render in frontend
+
     # =============================
-    # HANDLER-SPECIFIC: MEMORY UPDATES
+    # ROUTING (set by router node)
     # =============================
-    clarification_needed: bool  # True if mismatch needs user confirmation
-    clarification_question: Optional[str]  # Question to ask user
-    user_confirmed_update: Optional[bool]  # True if user confirmed the update
-    memory_updates: List[Dict[str, Any]]  # Updates to persist
-    fields_changed: List[str]
-    
+    next_handler: str        # \"handle_mismatch_confirmation\" | \"handle_query\" | \"handle_general\"
+    detected_intent: str     # \"update_info (mismatch)\" | \"query_loan\" | \"general_chat\"
+    intent_confidence: float
+    router_reasoning: str    # LLM's reasoning for the routing decision
+    router_confidence: float
+
     # =============================
-    # HANDLER-SPECIFIC: QUERY RESPONSES
+    # HANDLER: MISMATCH CONFIRMATION
     # =============================
-    query_type: Optional[str]  # 'loan_info', 'application_status', 'documents'
-    query_response: Optional[str]  # Answer to user's query
-    
+    clarification_needed: bool
+    clarification_question: Optional[str]
+
     # =============================
-    # LLM INFERENCE (handler output)
+    # HANDLER: QUERY
     # =============================
-    agent_response: str  # Final conversational response from SLM
-    model_temperature: float  # Default 0.7
-    max_tokens: int  # Default 256
-    
+    query_response: Optional[str]
+
+    # =============================
+    # LLM OUTPUT
+    # =============================
+    agent_response: str   # Final response sent back to the user
+
     # =============================
     # TOKEN COUNT & COMPRESSION
     # =============================
-    total_tokens: int  # Current conversation token count
-    should_summarize: bool  # True if token threshold exceeded
-    compression_ratio: float  # Current compression ratio (0.0-1.0)
-    summary: Optional[str]  # Generated summary if should_summarize=True
-    
-    # =============================
-    # ERROR & ROUTING
-    # =============================
-    error: Optional[str]  # Error message if any node fails
-    next_handler: str  # Router decision: "memory_update", "query", "general"
+    total_tokens: int
+    should_summarize: bool
+    summary: Optional[str]
 
+    # =============================
+    # ERROR HANDLING
+    # =============================
+    error: Optional[str]

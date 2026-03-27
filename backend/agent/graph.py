@@ -23,6 +23,7 @@ from agent.nodes import (
 from agent.handlers import (
     extract_memory_node,
     handle_mismatch_confirmation,
+    handle_save_confirmation,
     handle_query,
     handle_general,
 )
@@ -53,11 +54,12 @@ def build_graph():
     graph.add_node("extract_memory_node", extract_memory_node)
     graph.add_node("router", router)
     graph.add_node("handle_mismatch_confirmation", handle_mismatch_confirmation)
+    graph.add_node("handle_save_confirmation", handle_save_confirmation)
     graph.add_node("handle_query", handle_query)
     graph.add_node("handle_general", handle_general)
     graph.add_node("end_session", end_session)
     
-    logger.info("✅ Added 8 nodes (extract_memory_node added, handle_memory_update removed)")
+    logger.info("✅ Added 9 nodes")
     
     # ========================================================================
     # ADD LINEAR EDGES
@@ -72,10 +74,11 @@ def build_graph():
     
     # All terminal handlers go to end_session
     graph.add_edge("handle_mismatch_confirmation", "end_session")
+    graph.add_edge("handle_save_confirmation", "end_session")
     graph.add_edge("handle_query", "end_session")
     graph.add_edge("handle_general", "end_session")
     
-    logger.info("✅ Added 6 linear edges")
+    logger.info("✅ Added 7 linear edges")
     
     # ========================================================================
     # ADD CONDITIONAL EDGES

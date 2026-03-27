@@ -96,6 +96,23 @@ def _normalize_date(value: Any) -> Optional[str]:
 # PER-FIELD VALIDATION RULES
 # ============================================================================
 
+# Fields that require user confirmation before writing to SQLite (HITL).
+# Personal identity data (name, DOB, phone) is saved silently.
+# Financial and loan-related data is held as pending until user approves.
+FINANCIAL_FIELDS: frozenset = frozenset({
+    "monthly_income",
+    "annual_income",
+    "net_monthly_income",
+    "cibil_score",
+    "requested_loan_amount",
+    "requested_loan_type",
+    "requested_loan_tenure",
+    "existing_loan_amount",
+    "total_existing_emi_monthly",
+    "number_of_active_loans",
+    "coapplicant_income",
+})
+
 # Per-field type + range rules used for pre-storage validation
 _FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
     "monthly_income":              (float,  None),
@@ -263,17 +280,34 @@ async def extract_memory_node(state: SessionState) -> SessionState:
             state["memory_mismatches"] = mismatches
             logger.info(f"⚠️  Programmatic conflict detection: {len(mismatches)} conflict(s) flagged.")
 
-        # Step 3: Write non-conflicting schema fields to SQLite
+        # Step 3: Split valid fields — financial fields go to pending (HITL), rest write immediately
+        immediate_write: Dict[str, Any] = {}
+        pending_fields:  Dict[str, Any] = {}
+
+        for field_name, coerced_val in valid_schema.items():
+            if field_name in FINANCIAL_FIELDS:
+                pending_fields[field_name] = coerced_val
+            else:
+                immediate_write[field_name] = coerced_val
+
+        # Write non-financial fields immediately (name, DOB, phone, address, etc.)
         wrote_schema = False
-        if valid_schema:
+        if immediate_write:
             try:
                 with MemoryDatabase(db_path=SQLITE_PATH) as db:
                     db.init_schema()
-                    db.batch_update_fields(customer_id=customer_id, fields=valid_schema)
+                    db.batch_update_fields(customer_id=customer_id, fields=immediate_write)
                 wrote_schema = True
-                logger.info(f"   💾 SQLite: Wrote {len(valid_schema)} field(s) → {list(valid_schema.keys())}")
+                logger.info(f"   💾 SQLite (immediate): {list(immediate_write.keys())}")
             except Exception as e:
                 logger.error(f"❌ SQLite batch write failed: {e}")
+
+        # Stage financial fields as pending (user must confirm)
+        if pending_fields:
+            state["pending_fields"] = pending_fields
+            state["response_type"]  = "save_confirmation"
+            logger.info(f"   ⏳ Pending (HITL): {list(pending_fields.keys())}")
+
 
         # Step 4: Write contextual info to ChromaDB
         wrote_chroma = False
@@ -405,6 +439,8 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
         state["clarification_question"] = confirmation_msg
         state["clarification_needed"]   = True
         state["agent_response"]         = confirmation_msg
+        state["response_type"]          = "mismatch_confirmation"
+        state["response_options"]       = ["✅ Yes, use the new value", "❌ No, keep my old value"]
 
         logger.info(f"❓ Mismatch confirmation sent for {len(mismatches)} field(s)")
         return state
@@ -415,6 +451,65 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
             "I noticed some differences in the information you provided versus what we have on file. "
             "Could you please confirm your current details so we can keep your profile accurate?"
         )
+        return state
+
+
+
+
+# ============================================================================
+# HANDLER: HANDLE_SAVE_CONFIRMATION
+# ============================================================================
+
+async def handle_save_confirmation(state: SessionState) -> SessionState:
+    """
+    Runs when extract_memory_node has set pending_fields (financial data).
+    Generates a confirmation message summarizing what will be saved.
+    The actual write happens via the /confirm-save API endpoint.
+    """
+    try:
+        pending = state.get("pending_fields", {})
+        if not pending:
+            # Nothing pending — fall through to general
+            state["agent_response"] = "Got it! Is there anything else I can help you with?"
+            state["response_type"]  = "text"
+            return state
+
+        # Format the pending fields as human-readable
+        field_lines = []
+        field_labels = {
+            "monthly_income":            "Monthly Income",
+            "annual_income":             "Annual Income",
+            "net_monthly_income":        "Net Monthly Income",
+            "cibil_score":               "CIBIL Score",
+            "requested_loan_amount":     "Requested Loan Amount",
+            "requested_loan_type":       "Loan Type",
+            "requested_loan_tenure":     "Loan Tenure",
+            "existing_loan_amount":      "Existing Loan Amount",
+            "total_existing_emi_monthly": "Total Monthly EMI",
+            "number_of_active_loans":    "Active Loans",
+            "coapplicant_income":        "Co-applicant Income",
+        }
+        for field, value in pending.items():
+            label = field_labels.get(field, field.replace("_", " ").title())
+            field_lines.append(f"• {label}: {value}")
+
+        fields_summary = "\n".join(field_lines)
+        msg = (
+            f"I've noted the following financial details from our conversation:\n\n"
+            f"{fields_summary}\n\n"
+            f"Would you like me to save this to your profile?"
+        )
+
+        state["agent_response"]   = msg
+        state["response_type"]    = "save_confirmation"
+        state["response_options"] = ["✅ Save", "✏️ Edit", "❌ Don't Save"]
+
+        logger.info(f"📋 Save confirmation card generated for {len(pending)} field(s)")
+        return state
+
+    except Exception as e:
+        logger.error(f"❌ handle_save_confirmation failed: {e}", exc_info=True)
+        state["agent_response"] = "I've noted your information. Is there anything else I can help you with?"
         return state
 
 
@@ -443,6 +538,8 @@ async def handle_query(state: SessionState) -> SessionState:
 
         state["query_response"] = answer
         state["agent_response"] = answer
+        state["response_type"]  = "text"
+        state["response_options"] = ["📋 Check eligibility", "💬 Update my profile", "❓ Ask another question"]
         logger.info("💬 Query answered")
         return state
 
@@ -478,7 +575,9 @@ async def handle_general(state: SessionState) -> SessionState:
         answer = response.content if hasattr(response, "content") else str(response)
 
         state["agent_response"] = answer
-        logger.info("💬 General response sent")
+        state["response_type"]  = "text"
+        state["response_options"] = ["💰 Check loan eligibility", "📋 View my profile", "❓ Ask about loans"]
+        logger.info("💬 General response generated")
         return state
 
     except Exception as e:

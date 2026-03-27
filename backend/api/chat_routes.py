@@ -42,15 +42,17 @@ class ChatResponse(BaseModel):
     customer_id:           str
     user_input:            str
     agent_response:        str
-    detected_intent:       Optional[str]         = None
-    has_mismatch:          Optional[bool]        = None
-    mismatched_fields:     Optional[Dict[str, Any]] = None
-    clarification_question: Optional[str]        = None
-    memory_updates:        Optional[List]        = None
-    total_tokens:          Optional[int]         = None
-    should_summarize:      Optional[bool]        = None
-    error:                 Optional[str]         = None
-    timestamp:             Optional[str]         = None
+    # Structured UX fields (HITL + quick-replies)
+    response_type:         Optional[str]             = "text"   # text | options | save_confirmation | mismatch_confirmation
+    response_options:      Optional[List[str]]        = None     # quick-reply chip labels
+    pending_fields:        Optional[Dict[str, Any]]  = None     # fields awaiting user confirmation
+    # Metadata
+    detected_intent:       Optional[str]             = None
+    clarification_question: Optional[str]            = None
+    total_tokens:          Optional[int]             = None
+    should_summarize:      Optional[bool]            = None
+    error:                 Optional[str]             = None
+    timestamp:             Optional[str]             = None
 
 
 class SessionStartRequest(BaseModel):
@@ -192,53 +194,46 @@ async def send_message(request: ChatRequest):
             # Session metadata
             "session_id":  session_id,
             "customer_id": request.customer_id,
-            "started_at":  datetime.now(),
 
             # Input
             "user_input": request.user_input,
             "language":   language,
 
-            # FIX #5 — inject prior messages (load_memory will NOT reset these)
+            # Carry forward prior messages
             "messages": prior_messages,
 
-            # Memory (loaded by load_memory node)
-            "customer_facts":    {},
-            "dynamic_context":   [],
-            "session_summaries": [],
+            # Memory (populated by load_memory)
+            "customer_facts":      {},
+            "dynamic_context":     [],
+            "session_summaries":   [],
             "memory_prompt_block": None,
 
-            # Entity extraction
-            "extracted_entities": {},
-            "detected_intent":    "general_chat",
-            "intent_confidence":  0.0,
+            # Extraction + HITL
+            "memory_mismatches":  {},
+            "pending_fields":     {},
+            "response_type":      "text",
+            "response_options":   [],
 
-            # Mismatch detection
-            "has_mismatch":      False,
-            "mismatched_fields": {},
+            # Routing defaults
+            "detected_intent":   "general_chat",
+            "intent_confidence": 0.0,
+            "next_handler":      "handle_general",
 
-            # Handler-specific
-            "clarification_needed":  False,
+            # Handler defaults
+            "clarification_needed":   False,
             "clarification_question": None,
-            "user_confirmed_update": None,
-            "memory_updates":        [],
-            "fields_changed":        [],
-            "query_type":            None,
-            "query_response":        None,
+            "query_response":         None,
 
-            # LLM inference
-            "agent_response":   "",
-            "model_temperature": 0.7,
-            "max_tokens":        256,
+            # LLM output
+            "agent_response": "",
 
-            # FIX #6 — carry token count forward
+            # Token tracking
             "total_tokens":     prior_token_count,
             "should_summarize": False,
-            "compression_ratio": 0.0,
             "summary":          None,
 
-            # Error & routing
-            "error":        None,
-            "next_handler": "handle_general",
+            # Error
+            "error": None,
         }
 
         # ------------------------------------------------------------------
@@ -285,11 +280,11 @@ async def send_message(request: ChatRequest):
             agent_response=final_state.get(
                 "agent_response", "I encountered an issue processing your request."
             ),
+            response_type=final_state.get("response_type", "text"),
+            response_options=final_state.get("response_options") or [],
+            pending_fields=final_state.get("pending_fields") or None,
             detected_intent=final_state.get("detected_intent"),
-            has_mismatch=final_state.get("has_mismatch"),
-            mismatched_fields=final_state.get("mismatched_fields"),
             clarification_question=final_state.get("clarification_question"),
-            memory_updates=final_state.get("memory_updates"),
             total_tokens=final_state.get("total_tokens"),
             should_summarize=final_state.get("should_summarize"),
             error=final_state.get("error"),
@@ -322,6 +317,91 @@ async def delete_session(session_id: str):
     del SESSIONS[session_id]
     logger.info(f"🗑️  Session deleted: {session_id}")
     return {"success": True, "message": f"Session {session_id} deleted"}
+
+
+# ============================================================================
+# HUMAN-IN-THE-LOOP: CONFIRM SAVE
+# ============================================================================
+
+class ConfirmSaveRequest(BaseModel):
+    customer_id:   str
+    session_id:    str
+    approved:      bool                          # True = save, False = discard
+    edited_fields: Optional[Dict[str, Any]] = None  # User-corrected values
+
+
+class ConfirmSaveResponse(BaseModel):
+    success:       bool
+    status:        str                          # "saved" | "discarded"
+    fields_written: Optional[List[str]] = None
+    response:      str
+    error:         Optional[str] = None
+
+
+@router.post("/confirm-save", response_model=ConfirmSaveResponse)
+async def confirm_save(request: ConfirmSaveRequest):
+    """
+    Human-in-the-loop memory save endpoint.
+
+    When the agent extracts financial facts and puts them in pending_fields,
+    the frontend renders a SaveConfirmationCard. The user confirms, edits,
+    or discards. This endpoint executes the final write (or discard).
+    """
+    try:
+        if not request.approved:
+            logger.info(f"🚫 User discarded pending fields for {request.customer_id}")
+            return ConfirmSaveResponse(
+                success=True,
+                status="discarded",
+                response="No problem! I won't save those details.",
+            )
+
+        # Retrieve pending_fields from in-memory session
+        session = SESSIONS.get(request.session_id)
+        pending: Dict[str, Any] = {}
+
+        if session:
+            pending = session.get("pending_fields", {})
+
+        # Allow user-edited overrides
+        if request.edited_fields:
+            pending.update(request.edited_fields)
+
+        if not pending:
+            return ConfirmSaveResponse(
+                success=True,
+                status="discarded",
+                response="Nothing to save — the fields may have already been cleared.",
+            )
+
+        # Write to SQLite
+        from memory.sqlite_store import MemoryDatabase
+        with MemoryDatabase(db_path=SQLITE_PATH) as db:
+            db.init_schema()
+            db.batch_update_fields(customer_id=request.customer_id, fields=pending)
+
+        # Clear pending_fields from session
+        if session:
+            session["pending_fields"] = {}
+
+        fields_written = list(pending.keys())
+        logger.info(f"✅ Confirmed save for {request.customer_id}: {fields_written}")
+
+        return ConfirmSaveResponse(
+            success=True,
+            status="saved",
+            fields_written=fields_written,
+            response=f"Got it! I've saved your updated details ({', '.join(fields_written).replace('_', ' ')}).",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ confirm_save failed: {e}", exc_info=True)
+        return ConfirmSaveResponse(
+            success=False,
+            status="error",
+            response="Something went wrong saving your data. Please try again.",
+            error=str(e),
+        )
 
 
 @router.get("/health")

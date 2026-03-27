@@ -264,7 +264,17 @@ async def router(state: SessionState) -> SessionState:
         conv_history    = format_conversation_history(messages[:-1])
         memory_context  = state.get("memory_prompt_block", "No context available")
 
-        # 1. Programmatic Mismatch Override
+        # 1a. HITL Save Override — financial fields pending user confirmation
+        pending_fields = state.get("pending_fields", {})
+        if pending_fields and not state.get("memory_mismatches"):
+            logger.info(f"⏳ Router overridden by HITL save: {list(pending_fields.keys())}")
+            state["next_handler"]      = "handle_save_confirmation"
+            state["router_reasoning"]  = "Financial fields staged for user confirmation"
+            state["router_confidence"] = 1.0
+            state["detected_intent"]   = "save_confirmation"
+            return state
+
+        # 1b. Programmatic Mismatch Override
         mismatches = state.get("memory_mismatches", {})
         if mismatches:
             logger.warning(f"⚠️  Router overriden by programmatic conflict engine: {len(mismatches)} mismatches")
