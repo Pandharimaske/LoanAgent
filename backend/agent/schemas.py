@@ -44,7 +44,7 @@ class ConflictExtractionResult(BaseModel):
 class FieldClassification(BaseModel):
     """Classification of a single field/info."""
     raw_value: str = Field(..., description="Original customer input")
-    field_type: str = Field(..., description="SCHEMA_FIELD or CONTEXTUAL_INFO")
+    field_type: Literal["SCHEMA_FIELD", "CONTEXTUAL_INFO"] = Field(..., description="SCHEMA_FIELD or CONTEXTUAL_INFO")
     field_name: str = Field(..., description="Schema field name if SCHEMA_FIELD, else semantic description")
     normalized_value: ScalarValue = Field(default=None, description="Normalized value for schema fields")
     category: str = Field(..., description="Category (income, employment, etc.)")

@@ -280,6 +280,16 @@ async def router(state: SessionState) -> SessionState:
         state["next_handler"]       = decision.next_handler
         state["router_reasoning"]   = decision.reasoning
         state["router_confidence"]  = decision.confidence
+        
+        # Map handler to intent for frontend metadata
+        intent_map = {
+            "handle_mismatch_confirmation": "update_info (mismatch)",
+            "handle_memory_update": "update_info",
+            "handle_query": "query_loan",
+            "handle_general": "general_chat"
+        }
+        state["detected_intent"]    = intent_map.get(decision.next_handler, decision.next_handler)
+        state["intent_confidence"]  = decision.confidence
 
         # If routing to mismatch handler, run conflict extraction
         if decision.next_handler == "handle_mismatch_confirmation":

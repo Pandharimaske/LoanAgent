@@ -26,7 +26,7 @@ from agent.prompts import (
 )
 from agent.helpers import classify_fields_with_llm, create_llm
 from agent.schemas import FieldClassification
-from memory.sqlite_store import MemoryDatabase
+from memory.sqlite_store import MemoryDatabase, VALID_COLUMNS
 from memory.vector_store import VectorStore
 from config import SQLITE_PATH, CHROMA_PATH
 
@@ -147,6 +147,10 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                 schema_fields[name] = clf
             else:
                 contextual_fields[name] = clf
+
+        logger.error(f"DEBUG SCHEMA FIELDS: {schema_fields}")
+        logger.error(f"DEBUG VALID COLUMNS: {VALID_COLUMNS}")
+        logger.error(f"DEBUG CONTEXTUAL: {contextual_fields}")
 
         logger.info(f"   Schema: {len(schema_fields)} | Contextual: {len(contextual_fields)}")
 

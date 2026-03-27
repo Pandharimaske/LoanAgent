@@ -382,12 +382,13 @@ CUSTOMER STATEMENT:
 "{user_input}"
 
 For each piece of information mentioned, provide:
-1. Field name (from the schema above)
-2. Field value (normalized/cleaned)
-3. Data type (string, integer, decimal)
-4. Confidence level (0.0-1.0)
+1. raw_value: Exact original statement.
+2. field_type: MUST be exactly "SCHEMA_FIELD" if it matches a schema field, otherwise MUST be exactly "CONTEXTUAL_INFO"
+3. field_name: Schema field name (e.g. "full_name") or a short semantic description if contextual.
+4. normalized_value: Cleaned/validated value (for schema fields).
+5. category: General topic (e.g. personal, income).
 
-If information doesn't match any schema field, indicate it as "contextual" for ChromaDB storage."""
+CRITICAL INSTRUCTION: If it matches a schema field (e.g. full_name, monthly_income), you MUST set field_type to "SCHEMA_FIELD"."""
 
 FIELD_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", FIELD_CLASSIFICATION_SYSTEM_PROMPT),
