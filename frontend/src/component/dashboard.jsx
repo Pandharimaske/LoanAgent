@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { LogOut, Send, ShieldCheck, Loader2, Bot, User, Zap, Sparkles } from "lucide-react";
+import { LogOut, Send, ShieldCheck, Loader2, Bot, User, Zap, Sparkles, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -159,13 +159,24 @@ export default function DashboardPage() {
       {/* ── Navbar ── */}
       <nav style={styles.nav}>
         {/* Brand */}
-        <div style={styles.brand}>
-          <div style={styles.brandIcon}>
-            <ShieldCheck size={22} color="#fff" />
-          </div>
-          <div>
-            <span style={styles.brandName}>BrainBack</span>
-            <span style={styles.brandTag}> Secure</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <button
+            onClick={() => navigate("/")}
+            style={styles.backBtn}
+            onMouseEnter={e => Object.assign(e.currentTarget.style, styles.backBtnHover)}
+            onMouseLeave={e => Object.assign(e.currentTarget.style, styles.backBtnBase)}
+            title="Back to Home"
+          >
+            <ArrowLeft size={18} />
+          </button>
+          <div style={styles.brand}>
+            <div style={styles.brandIcon}>
+              <ShieldCheck size={22} color="#fff" />
+            </div>
+            <div>
+              <span style={styles.brandName}>BrainBack</span>
+              <span style={styles.brandTag}> Secure</span>
+            </div>
           </div>
         </div>
 
@@ -457,6 +468,14 @@ const styles = {
   },
   activeDot: { width: "7px", height: "7px", borderRadius: "50%", background: "#10b981" },
   activeTxt: { color: "#10b981", fontSize: "12px", fontWeight: 600 },
+  backBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    width: "36px", height: "36px", borderRadius: "10px",
+    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+    color: "#fff", cursor: "pointer", transition: "all 0.2s",
+  },
+  backBtnBase: { background: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.1)" },
+  backBtnHover: { background: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.25)", transform: "scale(1.05)" },
   logoutBtn: {
     display: "flex", alignItems: "center", gap: "7px",
     padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(239,68,68,0.22)",
