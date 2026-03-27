@@ -12,6 +12,8 @@ from auth.models import UserLogin, UserResponse, UserSession
 from auth.user_store import UserDatabase
 from auth.utils import TokenManager
 from config import SQLITE_PATH
+from memory.sqlite_store import MemoryDatabase
+from memory.models import CustomerMemory
 
 # Create router
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -139,6 +141,32 @@ async def register(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=error or "Registration failed",
+            )
+
+        # ----------------------------------------------------------------
+        # Seed an empty customer_memory row so the agent never has to
+        # auto-provision it mid-conversation. Pre-fill full_name from the
+        # registration form so the agent already knows the user's name.
+        # ----------------------------------------------------------------
+        try:
+            now = datetime.now()
+            initial_memory = CustomerMemory(
+                customer_id=customer_id,
+                full_name=request.name,
+                created_at=now,
+                last_updated=now,
+            )
+            mem_db = MemoryDatabase(db_path=SQLITE_PATH)
+            mem_db.connect()
+            mem_db.init_schema()
+            mem_db.save_customer_memory(initial_memory)
+            mem_db.close()
+        except Exception as mem_err:
+            # Non-fatal — user is still registered, memory row can be 
+            # created on first chat turn.
+            import logging
+            logging.getLogger(__name__).warning(
+                f"⚠️  Could not initialise customer_memory for {customer_id}: {mem_err}"
             )
 
         return RegisterResponse(
