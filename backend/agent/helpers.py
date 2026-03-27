@@ -133,12 +133,18 @@ async def extract_conflicts_with_llm(
         return {}
 
 
-async def classify_fields_with_llm(user_input: str) -> Dict[str, FieldClassification]:
+async def classify_fields_with_llm(
+    user_input: str,
+    memory_context: str = "No context available",
+    conversation_history: str = "No prior conversation"
+) -> Dict[str, FieldClassification]:
     """
     Use LLM to classify incoming information as schema fields or contextual info.
     
     Args:
         user_input: Customer's statement
+        memory_context: Formatted memory block containing known facts and context
+        conversation_history: Formatted string of the recent conversation
     
     Returns:
         {field_name: FieldClassification} for each classified field
@@ -149,7 +155,11 @@ async def classify_fields_with_llm(user_input: str) -> Dict[str, FieldClassifica
         structured_llm = llm.with_structured_output(FieldClassificationResult)
         chain = FIELD_CLASSIFICATION_PROMPT | structured_llm
         
-        result = await chain.ainvoke({"user_input": user_input})
+        result = await chain.ainvoke({
+            "user_input": user_input,
+            "memory_context": memory_context,
+            "conversation_history": conversation_history
+        })
         
         # Return classifications as dict using model_dump()
         classifications = {

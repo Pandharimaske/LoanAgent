@@ -366,6 +366,14 @@ EXAMPLES OF FIELD MATCHING:
 
 FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information against the database schema.
 
+MEMORY CONTEXT:
+{memory_context}
+
+RECENT CONVERSATION HISTORY:
+{conversation_history}
+
+---
+
 CUSTOMER STATEMENT:
 "{user_input}"
 

@@ -24,7 +24,7 @@ from agent.prompts import (
     GENERAL_RESPONSE_PROMPT,
     MISMATCH_VERIFICATION_PROMPT,
 )
-from agent.helpers import classify_fields_with_llm, create_llm
+from agent.helpers import classify_fields_with_llm, create_llm, format_conversation_history
 from agent.schemas import FieldClassification
 from memory.sqlite_store import MemoryDatabase, VALID_COLUMNS
 from memory.vector_store import VectorStore
@@ -123,11 +123,20 @@ async def handle_memory_update(state: SessionState) -> SessionState:
 
         logger.info(f"📝 Memory Update | {customer_id} | '{user_input[:60]}…'")
 
+        messages = state.get("messages") or []
+        # Exclude the current message (the one being classified) from history
+        conv_history = format_conversation_history(messages[:-1]) if messages else "No prior conversation"
+        memory_context = state.get("memory_prompt_block", "No context available")
+
         # ------------------------------------------------------------------
-        # Step 1 — Classify fields with LLM
+        # Step 1 — Classify fields with LLM (with full conversational context)
         # ------------------------------------------------------------------
         try:
-            classifications: Dict[str, FieldClassification] = await classify_fields_with_llm(user_input)
+            classifications: Dict[str, FieldClassification] = await classify_fields_with_llm(
+                user_input=user_input,
+                memory_context=memory_context,
+                conversation_history=conv_history
+            )
         except Exception as e:
             logger.error(f"❌ Field classification failed: {e}")
             state["agent_response"] = "I had trouble understanding that. Could you rephrase?"
