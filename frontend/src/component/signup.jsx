@@ -5,7 +5,6 @@ import { Mail, Lock } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL || "http://localhost:8000";
 
-
 const SignUp = () => {
   const navigate = useNavigate();
 
@@ -42,15 +41,38 @@ const SignUp = () => {
     try {
       setLoading(true);
 
-      // Use VITE_BASE_URL env var, correct backend endpoint is /auth/register
       const response = await axios.post(
         `${BASE_URL}/auth/register`,
         { email, name, password }
       );
 
       if (response.data.success) {
-        localStorage.setItem("userId", response.data.user_id || "");
-        navigate("/login");
+        // Store user data from registration
+        localStorage.setItem("user_id", response.data.user_id);
+        localStorage.setItem("email", response.data.email);
+
+        // Auto-login after signup to get JWT token & session
+        try {
+          const loginResponse = await axios.post(
+            `${BASE_URL}/auth/login`,
+            { email, password }
+          );
+
+          if (loginResponse.data.success) {
+            localStorage.setItem("token", loginResponse.data.jwt_token);
+            localStorage.setItem("sessionId", loginResponse.data.session_id);
+            localStorage.setItem("userId", loginResponse.data.user_id);
+            localStorage.setItem("user_id", loginResponse.data.user_id);
+            localStorage.setItem("customer_id", loginResponse.data.customer_id || "");
+            navigate("/dashboard");
+          } else {
+            // Signup worked but login failed — go to login page
+            navigate("/login");
+          }
+        } catch (loginErr) {
+          // Signup succeeded but auto-login failed — go to login page
+          navigate("/login");
+        }
       } else {
         setError(response.data.message || "Registration failed");
       }
