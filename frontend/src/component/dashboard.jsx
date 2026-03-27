@@ -227,7 +227,7 @@ export default function DashboardPage() {
               <div style={styles.heroWrap}>
                 <div style={styles.heroGlow} />
                 <div style={styles.heroIcon}>
-                  <ShieldCheck size={36} color="#fff" />
+                  <ShieldCheck size={26} color="#fff" />
                 </div>
                 <h2 style={styles.heroTitle}>How can I help you today?</h2>
                 <p style={styles.heroSubtitle}>
@@ -473,10 +473,11 @@ const styles = {
     position: "relative", zIndex: 1,
     flex: 1, display: "flex", alignItems: "stretch",
     maxWidth: "900px", width: "100%",
-    margin: "28px auto",
-    padding: "0 24px",
+    margin: "16px auto",
+    padding: "0 24px 16px",
     boxSizing: "border-box",
     minHeight: 0,
+    overflow: "hidden",
   },
   chatCard: {
     flex: 1, display: "flex", flexDirection: "column",
@@ -522,32 +523,32 @@ const styles = {
 
   /* Hero */
   heroWrap: {
-    textAlign: "center", padding: "40px 20px 20px",
-    display: "flex", flexDirection: "column", alignItems: "center", gap: "14px",
+    textAlign: "center", padding: "20px 20px 12px",
+    display: "flex", flexDirection: "column", alignItems: "center", gap: "10px",
     position: "relative",
   },
   heroGlow: {
-    position: "absolute", top: "10px", left: "50%", transform: "translateX(-50%)",
-    width: "220px", height: "220px", borderRadius: "50%",
+    position: "absolute", top: "0", left: "50%", transform: "translateX(-50%)",
+    width: "160px", height: "160px", borderRadius: "50%",
     background: "radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 70%)",
     filter: "blur(30px)", animation: "heroGlow 4s ease-in-out infinite",
     pointerEvents: "none",
   },
   heroIcon: {
     position: "relative", zIndex: 1,
-    width: "72px", height: "72px", borderRadius: "22px",
+    width: "52px", height: "52px", borderRadius: "16px",
     background: "linear-gradient(135deg, #3b82f6, #8b5cf6)",
     display: "flex", alignItems: "center", justifyContent: "center",
-    boxShadow: "0 12px 40px rgba(59,130,246,0.4)",
+    boxShadow: "0 8px 28px rgba(59,130,246,0.4)",
   },
   heroTitle: {
     position: "relative", zIndex: 1,
-    margin: 0, fontSize: "26px", fontWeight: 800,
+    margin: 0, fontSize: "20px", fontWeight: 800,
     color: "#f0f4ff", letterSpacing: "-0.02em",
   },
   heroSubtitle: {
     position: "relative", zIndex: 1,
-    margin: 0, fontSize: "14px", color: "#64748b", maxWidth: "400px",
+    margin: 0, fontSize: "13px", color: "#64748b", maxWidth: "380px",
   },
 
   /* Suggestion chips */
