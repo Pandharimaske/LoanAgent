@@ -15,16 +15,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from langgraph.graph import StateGraph, END
 from agent.state import SessionState
 from agent.nodes import (
+    check_token_threshold,
     load_memory,
     extract_entities,
-    detect_conflicts,
-    ask_user,
-    retrieve_context,
-    slm_inference,
-    check_token_threshold,
+    router,
+    handle_memory_update,
+    handle_query,
+    handle_general,
     end_session,
 )
-from agent.edges import CONDITIONAL_EDGES, LINEAR_EDGES
+from agent.edges import CONDITIONAL_EDGES
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +46,16 @@ def build_graph():
     
     logger.info("Adding nodes to graph...")
     
+    graph.add_node("check_token_threshold", check_token_threshold)
     graph.add_node("load_memory", load_memory)
     graph.add_node("extract_entities", extract_entities)
-    graph.add_node("detect_conflicts", detect_conflicts)
-    graph.add_node("ask_user", ask_user)
-    graph.add_node("retrieve_context", retrieve_context)
-    graph.add_node("slm_inference", slm_inference)
-    graph.add_node("check_token_threshold", check_token_threshold)
+    graph.add_node("router", router)
+    graph.add_node("handle_memory_update", handle_memory_update)
+    graph.add_node("handle_query", handle_query)
+    graph.add_node("handle_general", handle_general)
     graph.add_node("end_session", end_session)
     
-    logger.info("✅ Added 8 nodes")
+    logger.info("✅ Added 8 nodes (new flow order)")
     
     # ========================================================================
     # ADD LINEAR EDGES
@@ -63,10 +63,17 @@ def build_graph():
     
     logger.info("Adding linear edges...")
     
-    for source, target in LINEAR_EDGES:
-        graph.add_edge(source, target)
+    # New priority-based flow
+    graph.add_edge("check_token_threshold", "load_memory")
+    graph.add_edge("load_memory", "extract_entities")
+    graph.add_edge("extract_entities", "router")
     
-    logger.info(f"✅ Added {len(LINEAR_EDGES)} linear edges")
+    # All handlers go to end_session
+    graph.add_edge("handle_memory_update", "end_session")
+    graph.add_edge("handle_query", "end_session")
+    graph.add_edge("handle_general", "end_session")
+    
+    logger.info("✅ Added 6 linear edges")
     
     # ========================================================================
     # ADD CONDITIONAL EDGES
@@ -83,10 +90,10 @@ def build_graph():
     # SET ENTRY POINT & EXIT POINT
     # ========================================================================
     
-    graph.set_entry_point("load_memory")
+    graph.set_entry_point("check_token_threshold")
     graph.set_finish_point("end_session")
     
-    logger.info("Entry: load_memory | Exit: end_session")
+    logger.info("Entry: check_token_threshold (FIRST) | Exit: end_session")
     
     # ========================================================================
     # COMPILE

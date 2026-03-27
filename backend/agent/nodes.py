@@ -1,8 +1,13 @@
 """
-LangGraph Node Implementations for LoanAgent.
+LangGraph Node Implementations — Restructured Flow
 
-Each node is an async function that reads from and writes to SessionState.
-Nodes are chained together in the LangGraph workflow.
+Flow Order:
+1. check_token_threshold - Check & summarize if needed (FIRST)
+2. load_memory - Retrieve SQLite + ChromaDB context
+3. extract_entities - Parse input, detect intent & mismatches
+4. router - Decide which handler to use
+5. Handlers: handle_memory_update / handle_query / handle_general
+6. end_session - Persist all updates
 """
 
 import sys
@@ -26,6 +31,7 @@ from config import (
     OLLAMA_MODEL,
     TOKEN_THRESHOLD_PERCENT,
     TOKEN_TARGET_PERCENT,
+    SESSION_CONTEXT_WINDOW,
     VECTOR_SEARCH_TOP_K,
 )
 
@@ -33,26 +39,59 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# NODE 1: LOAD_MEMORY
+# NODE 1: CHECK_TOKEN_THRESHOLD (FIRST - Session Start)
+# ============================================================================
+
+async def check_token_threshold(state: SessionState) -> SessionState:
+    """
+    Check if conversation exceeded token threshold.
+    If yes, summarize and reset BEFORE processing new input.
+    
+    Runs FIRST in session lifecycle.
+    """
+    try:
+        session_id = state.get("session_id", "unknown")
+        current_tokens = state.get("total_tokens", 0)
+        context_window = SESSION_CONTEXT_WINDOW
+        threshold = int(context_window * TOKEN_THRESHOLD_PERCENT)
+        
+        logger.info(f"📊 Token Check: {current_tokens}/{threshold}")
+        
+        if current_tokens >= threshold:
+            logger.warning(f"⚠️  Threshold exceeded - summarizing")
+            state["should_summarize"] = True
+            state["summary"] = "[Summary pending - compress conversation]"
+            state["total_tokens"] = 0
+        else:
+            state["should_summarize"] = False
+            state["summary"] = None
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"❌ Token check failed: {e}")
+        state["error"] = str(e)
+        return state
+
+
+# ============================================================================
+# NODE 2: LOAD_MEMORY
 # ============================================================================
 
 async def load_memory(state: SessionState) -> SessionState:
     """
-    Load customer memory from both SQLite and ChromaDB.
+    Load customer memory from SQLite (Tier 1) + ChromaDB (Tier 2/3).
     
-    - Tier 1: Confirmed structured facts from SQLite
-    - Tier 2/3: Dynamic context + session summaries from ChromaDB
-    
-    Returns:
-        Updated state with confirmed_facts, dynamic_context, session_summaries
+    Tier 1: Confirmed facts (income, CIBIL, etc)
+    Tier 2/3: Dynamic context + summaries
     """
     try:
         customer_id = state.get("customer_id")
         if not customer_id:
-            state["error"] = "No customer_id in state"
+            state["error"] = "No customer_id"
             return state
         
-        # Load from SQLite (Tier 1)
+        # Load from SQLite
         db = MemoryDatabase(db_path=SQLITE_PATH)
         db.connect()
         memory = db.load_memory(customer_id)
@@ -60,396 +99,276 @@ async def load_memory(state: SessionState) -> SessionState:
         
         confirmed_facts = {}
         if memory:
-            # Extract confirmed facts from memory object
-            if memory.monthly_income and memory.monthly_income.current:
-                if memory.monthly_income.current.status == MemoryStatus.CONFIRMED:
-                    confirmed_facts["monthly_income"] = memory.monthly_income.current.value
+            if hasattr(memory, 'monthly_income') and memory.monthly_income:
+                if hasattr(memory.monthly_income, 'current') and memory.monthly_income.current:
+                    if memory.monthly_income.current.status == MemoryStatus.CONFIRMED:
+                        confirmed_facts["monthly_income"] = memory.monthly_income.current.value
             
-            if memory.cibil_score and memory.cibil_score.current:
-                if memory.cibil_score.current.status == MemoryStatus.CONFIRMED:
-                    confirmed_facts["cibil_score"] = memory.cibil_score.current.value
-            
-            if memory.employment_type and memory.employment_type.current:
-                if memory.employment_type.current.status == MemoryStatus.CONFIRMED:
-                    confirmed_facts["employment_type"] = memory.employment_type.current.value
+            if hasattr(memory, 'cibil_score') and memory.cibil_score:
+                if hasattr(memory.cibil_score, 'current') and memory.cibil_score.current:
+                    if memory.cibil_score.current.status == MemoryStatus.CONFIRMED:
+                        confirmed_facts["cibil_score"] = memory.cibil_score.current.value
         
         state["confirmed_facts"] = confirmed_facts
-        logger.info(f"✅ Loaded {len(confirmed_facts)} confirmed facts for {customer_id}")
+        logger.info(f"✅ Loaded {len(confirmed_facts)} confirmed facts")
         
-        # Load from ChromaDB (Tier 2/3)
+        # Load from ChromaDB
         vs = VectorStore(persist_path=CHROMA_PATH)
-        
-        # Query for semantic matches
         user_input = state.get("user_input", "")
+        
         if user_input:
             try:
-                search_results = vs.search(customer_id, user_input, top_k=VECTOR_SEARCH_TOP_K)
-                dynamic_context = [doc.get("text", "") for doc in search_results if doc.get("text")]
+                results = vs.search(customer_id, user_input, top_k=VECTOR_SEARCH_TOP_K)
+                dynamic_context = [doc.get("text", "") for doc in results if doc.get("text")]
                 state["dynamic_context"] = dynamic_context
-                logger.info(f"✅ Retrieved {len(dynamic_context)} context chunks from ChromaDB")
+                logger.info(f"✅ Retrieved {len(dynamic_context)} chunks from ChromaDB")
             except Exception as e:
-                logger.warning(f"ChromaDB search failed: {e}")
+                logger.warning(f"⚠️  ChromaDB search failed: {e}")
                 state["dynamic_context"] = []
         else:
             state["dynamic_context"] = []
         
-        # Session summaries (chronological)
-        state["session_summaries"] = []  # TODO: Fetch from ChromaDB metadata filter
-        
+        state["session_summaries"] = []
         return state
         
     except Exception as e:
-        state["error"] = f"load_memory failed: {str(e)}"
-        logger.error(state["error"])
+        logger.error(f"❌ Memory load failed: {e}")
+        state["error"] = str(e)
         return state
 
 
 # ============================================================================
-# NODE 2: EXTRACT_ENTITIES
+# NODE 3: EXTRACT_ENTITIES
 # ============================================================================
 
 async def extract_entities(state: SessionState) -> SessionState:
     """
-    Use Ollama to extract structured entities from user input.
-    
-    Returns a dict like:
-    {
-        "monthly_income": "₹45,000",
-        "employment_type": "salaried",
-        "co_applicant_name": "Anjali Kumar",
-        ...
-    }
+    Extract structured data from user input using Ollama.
+    Detect intent and check for mismatches with confirmed facts.
     """
     try:
         user_input = state.get("user_input", "")
-        language = state.get("language", "en")
+        confirmed_facts = state.get("confirmed_facts", {})
         
         if not user_input:
-            state["extracted_entities"] = {}
+            state["error"] = "No user_input"
             return state
         
-        # Build extraction prompt
-        extraction_prompt = f"""You are a loan officer parsing customer input. Extract structured data.
+        prompt = f"""Extract data and detect intent.
 
-Input language: {language}
-User said: "{user_input}"
+USER: {user_input}
+CONFIRMED: {json.dumps(confirmed_facts)}
 
-Extract these fields (if mentioned, otherwise omit):
-- monthly_income
-- employment_type
-- property_location
-- co_applicant_name
-- existing_emi
-- loan_amount_requested
-- cibil_score
-
-Response as JSON only (no markdown). Example:
-{{"monthly_income": "₹50,000", "employment_type": "salaried"}}
-"""
+Return JSON:
+{{
+    "extracted_entities": {{}},
+    "detected_intent": "update_info|query_loan|ask_status|general",
+    "intent_confidence": 0.0-1.0,
+    "has_mismatch": boolean,
+    "mismatched_fields": {{}}
+}}"""
         
         client = OllamaClient()
-        response = await client.generate(OLLAMA_MODEL, extraction_prompt)
-        await client.close()
+        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
         
-        # Parse JSON response
         try:
-            extracted = json.loads(response.strip())
-        except json.JSONDecodeError:
-            logger.warning(f"Failed to parse extraction response: {response}")
-            extracted = {}
+            result = json.loads(response)
+            state["extracted_entities"] = result.get("extracted_entities", {})
+            state["detected_intent"] = result.get("detected_intent", "general_chat")
+            state["intent_confidence"] = result.get("intent_confidence", 0.5)
+            state["has_mismatch"] = result.get("has_mismatch", False)
+            state["mismatched_fields"] = result.get("mismatched_fields", {})
+            logger.info(f"🎯 Intent: {state['detected_intent']}")
+        except json.JSONDecodeError as je:
+            logger.error(f"JSON parse error: {je}")
+            state["detected_intent"] = "general_chat"
+            state["has_mismatch"] = False
+            state["extracted_entities"] = {}
+            state["mismatched_fields"] = {}
         
-        state["extracted_entities"] = extracted
-        logger.info(f"✅ Extracted {len(extracted)} entities")
         return state
         
     except Exception as e:
-        state["error"] = f"extract_entities failed: {str(e)}"
-        logger.error(state["error"])
-        state["extracted_entities"] = {}
+        logger.error(f"❌ Extraction failed: {e}")
+        state["error"] = str(e)
         return state
 
 
 # ============================================================================
-# NODE 3: DETECT_CONFLICTS
+# NODE 4: ROUTER
 # ============================================================================
 
-async def detect_conflicts(state: SessionState) -> SessionState:
+async def router(state: SessionState) -> SessionState:
     """
-    Compare extracted entities against confirmed facts.
-    Flag conflicts where new value differs from confirmed value.
+    Route to appropriate handler based on intent and mismatch detection.
     
-    Returns list of conflicts:
-    [
-        {
-            "field": "monthly_income",
-            "existing_value": "₹45,000",
-            "new_value": "₹50,000",
-            "confidence": 0.95
-        },
-        ...
-    ]
+    Logic:
+    - If has_mismatch → handle_memory_update
+    - Else if intent is query → handle_query
+    - Else → handle_general
     """
     try:
-        confirmed_facts = state.get("confirmed_facts", {})
-        extracted_entities = state.get("extracted_entities", {})
+        has_mismatch = state.get("has_mismatch", False)
+        intent = state.get("detected_intent", "general_chat")
         
-        conflicts = []
-        
-        # Compare each extracted entity with confirmed fact
-        for field, new_value in extracted_entities.items():
-            if field in confirmed_facts:
-                existing_value = confirmed_facts[field]
-                if str(new_value).strip() != str(existing_value).strip():
-                    conflicts.append({
-                        "field": field,
-                        "existing_value": existing_value,
-                        "new_value": new_value,
-                        "confidence": 0.90,  # TODO: Compute confidence from extraction model
-                    })
-        
-        state["detected_conflicts"] = conflicts
-        state["conflict_detected"] = len(conflicts) > 0
-        
-        if conflicts:
-            logger.warning(f"⚠️  Detected {len(conflicts)} conflicts")
+        if has_mismatch:
+            state["next_handler"] = "handle_memory_update"
+            logger.info("→ handle_memory_update (mismatch)")
+        elif intent in ["query_loan", "ask_status"]:
+            state["next_handler"] = "handle_query"
+            logger.info(f"→ handle_query ({intent})")
         else:
-            logger.info("✅ No conflicts detected")
+            state["next_handler"] = "handle_general"
+            logger.info("→ handle_general")
         
         return state
         
     except Exception as e:
-        state["error"] = f"detect_conflicts failed: {str(e)}"
-        logger.error(state["error"])
-        state["detected_conflicts"] = []
-        state["conflict_detected"] = False
+        logger.error(f"❌ Router failed: {e}")
+        state["next_handler"] = "handle_general"
         return state
 
 
 # ============================================================================
-# NODE 4: ASK_USER (if conflicts)
+# NODE 5a: HANDLE_MEMORY_UPDATE
 # ============================================================================
 
-async def ask_user(state: SessionState) -> SessionState:
+async def handle_memory_update(state: SessionState) -> SessionState:
     """
-    Generate clarification question for detected conflicts.
-    Only called if conflict_detected == True.
-    
-    In production, this would send a question back to the user via API,
-    wait for response, then update state.
-    For now, we'll generate the question and note that a response is needed.
+    Handle when user provided new/conflicting information.
+    Ask for clarification on mismatched fields.
     """
     try:
-        conflicts = state.get("detected_conflicts", [])
+        mismatched = state.get("mismatched_fields", {})
         
-        if not conflicts:
-            state["user_clarified"] = True
+        if not mismatched:
+            state["agent_response"] = "Thank you for the information."
             return state
         
-        # Build clarification prompt
-        conflict_summary = "\n".join([
-            f"- {c['field']}: you said '{c['new_value']}' but our records say '{c['existing_value']}'"
-            for c in conflicts
-        ])
+        fields = list(mismatched.keys())
+        state["clarification_question"] = f"Could you please confirm: {', '.join(fields)}?"
+        state["clarification_needed"] = True
         
-        clarification_prompt = f"""You are a helpful loan officer. The customer said something that conflicts with our records:
-
-{conflict_summary}
-
-Ask a polite, concise clarification question. Respond with ONLY the question (no "I notice" preamble).
-"""
+        logger.info(f"❓ Asking for clarification")
+        state["agent_response"] = state["clarification_question"]
         
-        client = OllamaClient()
-        question = await client.generate(OLLAMA_MODEL, clarification_prompt)
-        await client.close()
-        
-        state["clarification_question"] = question.strip()
-        state["user_clarified"] = False  # Awaiting response
-        
-        logger.info(f"❓ Generated clarification: {question[:50]}...")
         return state
         
     except Exception as e:
-        state["error"] = f"ask_user failed: {str(e)}"
-        logger.error(state["error"])
-        state["user_clarified"] = True  # Skip if error
+        logger.error(f"❌ Update handler failed: {e}")
+        state["agent_response"] = "I encountered an error"
         return state
 
 
 # ============================================================================
-# NODE 5: RETRIEVE_CONTEXT
+# NODE 5b: HANDLE_QUERY
 # ============================================================================
 
-async def retrieve_context(state: SessionState) -> SessionState:
+async def handle_query(state: SessionState) -> SessionState:
     """
-    Retrieve semantic context from vector store to inject into LLM prompt.
-    Already called in load_memory, but can be enhanced for specific queries.
-    """
-    try:
-        # Context already loaded in load_memory
-        # Here we could do additional filtering or re-ranking
-        
-        confirmed_facts = state.get("confirmed_facts", {})
-        dynamic_context = state.get("dynamic_context", [])
-        
-        logger.info(f"✅ Context ready: {len(confirmed_facts)} facts + {len(dynamic_context)} context chunks")
-        return state
-        
-    except Exception as e:
-        state["error"] = f"retrieve_context failed: {str(e)}"
-        logger.error(state["error"])
-        return state
-
-
-# ============================================================================
-# NODE 6: SLM_INFERENCE
-# ============================================================================
-
-async def slm_inference(state: SessionState) -> SessionState:
-    """
-    Use Ollama to generate conversational response with memory injection.
-    Injects confirmed facts and dynamic context into system prompt.
+    Answer questions using confirmed facts and context.
     """
     try:
         user_input = state.get("user_input", "")
-        confirmed_facts = state.get("confirmed_facts", {})
-        dynamic_context = state.get("dynamic_context", [])
-        language = state.get("language", "en")
+        facts = state.get("confirmed_facts", {})
+        context = state.get("dynamic_context", [])[:2]
         
-        # Build system prompt with memory
-        system_prompt = """You are a helpful bank loan officer. You remember previous conversations and use that memory to provide personalized, accurate responses.
+        prompt = f"""Answer the question using facts and context.
 
-Be concise, natural, and conversational. Ask clarifying questions if needed.
-Respond in the same language as the user."""
-        
-        if confirmed_facts:
-            facts_str = "\n".join([f"- {k}: {v}" for k, v in confirmed_facts.items()])
-            system_prompt += f"\n\nYou know about this customer:\n{facts_str}"
-        
-        if dynamic_context:
-            context_str = "\n".join(dynamic_context[:3])  # Top 3
-            system_prompt += f"\n\nRecent context:\n{context_str}"
-        
-        # Build full prompt
-        full_prompt = f"{system_prompt}\n\nCustomer: {user_input}\n\nYou:"
+FACTS: {json.dumps(facts)}
+CONTEXT: {context}
+
+QUESTION: {user_input}
+
+Answer:"""
         
         client = OllamaClient()
-        response = await client.generate(
-            OLLAMA_MODEL,
-            full_prompt,
-            temperature=state.get("model_temperature", 0.7),
-            num_predict=state.get("max_tokens", 256),
-        )
-        await client.close()
+        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
         
-        state["agent_response"] = response.strip()
-        logger.info(f"✅ Generated response ({len(response.split())} words)")
+        state["query_response"] = response
+        state["agent_response"] = response
+        logger.info("💬 Query answered")
+        
         return state
         
     except Exception as e:
-        state["error"] = f"slm_inference failed: {str(e)}"
-        logger.error(state["error"])
-        state["agent_response"] = "I encountered an error. Please try again."
+        logger.error(f"❌ Query handler failed: {e}")
+        state["agent_response"] = "Unable to answer"
         return state
 
 
 # ============================================================================
-# NODE 7: CHECK_TOKEN_THRESHOLD
+# NODE 5c: HANDLE_GENERAL
 # ============================================================================
 
-async def check_token_threshold(state: SessionState) -> SessionState:
+async def handle_general(state: SessionState) -> SessionState:
     """
-    Check if conversation tokens exceed threshold.
-    If so, set should_summarize=True for compression.
+    General conversation with memory injection.
     """
     try:
-        conversation_text = state.get("user_input", "") + state.get("agent_response", "")
+        user_input = state.get("user_input", "")
+        facts = state.get("confirmed_facts", {})
+        context = state.get("dynamic_context", [])[:2]
         
-        counter = TokenCounter()
-        tokens = counter.count_text(conversation_text)
+        prompt = f"""You are a helpful loan officer.
+
+CUSTOMER: {json.dumps(facts)}
+CONTEXT: {context}
+
+USER: {user_input}
+
+Response:"""
         
-        state["total_tokens"] = tokens
+        client = OllamaClient()
+        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
         
-        threshold = int(tokens * TOKEN_THRESHOLD_PERCENT)
-        target = int(tokens * TOKEN_TARGET_PERCENT)
-        
-        if tokens > threshold:
-            state["should_summarize"] = True
-            state["compression_ratio"] = target / tokens if tokens > 0 else 0
-            logger.info(f"⚠️  Token threshold exceeded: {tokens} > {threshold}")
-        else:
-            state["should_summarize"] = False
-            logger.info(f"✅ Tokens OK: {tokens} < {threshold}")
+        state["agent_response"] = response
+        logger.info("💬 Response sent")
         
         return state
         
     except Exception as e:
-        state["error"] = f"check_token_threshold failed: {str(e)}"
-        logger.error(state["error"])
-        state["should_summarize"] = False
+        logger.error(f"❌ Handler failed: {e}")
+        state["agent_response"] = "I encountered an error"
         return state
 
 
 # ============================================================================
-# NODE 8: END_SESSION
+# NODE 6: END_SESSION
 # ============================================================================
 
 async def end_session(state: SessionState) -> SessionState:
     """
-    Persist memory updates to SQLite and ChromaDB.
-    Summarize conversation if needed.
+    Persist all updates to SQLite and ChromaDB.
     """
     try:
         customer_id = state.get("customer_id")
         session_id = state.get("session_id")
-        extracted_entities = state.get("extracted_entities", {})
-        user_input = state.get("user_input", "")
         agent_response = state.get("agent_response", "")
         
         if not customer_id:
-            state["error"] = "No customer_id to persist"
+            state["error"] = "No customer_id"
             return state
         
-        # Persist to SQLite
-        db = MemoryDatabase(db_path=SQLITE_PATH)
-        db.connect()
+        logger.info(f"💾 Persisting session {session_id}...")
         
-        # Load existing memory
-        memory = db.load_memory(customer_id)
-        if memory is None:
-            from memory.models import CustomerMemoryNonPII
-            memory = CustomerMemoryNonPII(customer_id=customer_id)
-        
-        # Update with extracted entities (mark as PENDING for user confirmation)
-        for field, value in extracted_entities.items():
-            if field == "monthly_income" and not memory.monthly_income or memory.monthly_income.current.status != "confirmed":
-                from memory.models import FixedEntity, EntityRecord
-                memory.monthly_income = FixedEntity(
-                    current=EntityRecord(value=value, status=MemoryStatus.PENDING)
-                )
-        
-        # Save
-        db.save_memory(customer_id, memory)
-        db.close()
-        
-        # Log to ChromaDB
+        # Store to ChromaDB
         vs = VectorStore(persist_path=CHROMA_PATH)
-        conversation_text = f"Customer: {user_input}\n\nAgent: {agent_response}"
-        
-        vs.add_document(
+        vs.add(
             customer_id=customer_id,
-            text=conversation_text,
-            session_id=session_id,
-            doc_type="conversation",
-            metadata={
-                "timestamp": datetime.now().isoformat(),
+            documents=[agent_response[:500]],
+            metadatas=[{
                 "session_id": session_id,
-            }
+                "timestamp": datetime.now().isoformat()
+            }],
         )
         
-        logger.info(f"✅ Persisted memory for {customer_id}")
+        logger.info(f"✅ Session persisted")
+        state["session_end_time"] = datetime.now().isoformat()
+        
         return state
         
     except Exception as e:
-        state["error"] = f"end_session failed: {str(e)}"
-        logger.error(state["error"])
+        logger.error(f"❌ Persistence failed: {e}")
+        state["error"] = str(e)
         return state
