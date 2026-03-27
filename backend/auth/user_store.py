@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import SQLITE_PATH
-from auth.models import User, UserCreate, UserRole, UserStatus, UserSession
+from auth.models import User, UserCreate, UserSession
 from auth.utils import PasswordManager, UserIDGenerator, TokenManager
 
 
@@ -31,7 +31,7 @@ class UserDatabase:
 
     def connect(self) -> sqlite3.Connection:
         """Connect to database."""
-        self.connection = sqlite3.connect(self.db_path)
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         return self.connection
@@ -133,8 +133,8 @@ class UserDatabase:
                 """
                 INSERT INTO users (
                     user_id, username, email, name, password_hash,
-                    role, status, customer_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    customer_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -142,8 +142,6 @@ class UserDatabase:
                     email,
                     name,
                     password_hash,
-                    UserRole.CUSTOMER.value,
-                    UserStatus.ACTIVE.value,
                     customer_id,
                     datetime.now().isoformat(),
                 ),
@@ -163,13 +161,13 @@ class UserDatabase:
             return False, None, str(e)
 
     def login(
-        self, username: str, password: str, expires_in_hours: int = 24
+        self, email: str, password: str, expires_in_hours: int = 24
     ) -> Tuple[bool, Optional[UserSession], Optional[str]]:
         """
         Authenticate user and create session.
         
         Args:
-            username: Username
+            email: Email address
             password: Plain text password
             expires_in_hours: Session expiry time
             
@@ -182,22 +180,18 @@ class UserDatabase:
         try:
             cursor = self.connection.cursor()
 
-            # Fetch user by username
-            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            # Fetch user by email
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
             row = cursor.fetchone()
 
             if not row:
-                return False, None, "Invalid username or password"
+                return False, None, "Invalid email or password"
 
             user = dict(row)
 
             # Verify password
             if not PasswordManager.verify_password(password, user["password_hash"]):
-                return False, None, "Invalid username or password"
-
-            # Check if user is active
-            if user["status"] != UserStatus.ACTIVE.value:
-                return False, None, f"User account is {user['status']}"
+                return False, None, "Invalid email or password"
 
             # Create session
             session_id = UserIDGenerator.generate_session_id()
@@ -235,7 +229,7 @@ class UserDatabase:
             session = UserSession(
                 session_id=session_id,
                 user_id=user["user_id"],
-                username=user["username"],
+                email=user["email"],
                 customer_id=user["customer_id"],
                 logged_in_at=now,
                 last_activity=now,
@@ -275,9 +269,6 @@ class UserDatabase:
                 username=user_data["username"],
                 email=user_data["email"],
                 name=user_data["name"],
-                role=UserRole(user_data["role"]),
-                status=UserStatus(user_data["status"]),
-                is_verified=bool(user_data["is_verified"]),
                 customer_id=user_data["customer_id"],
                 created_at=datetime.fromisoformat(user_data["created_at"]),
                 last_login=datetime.fromisoformat(user_data["last_login"])
