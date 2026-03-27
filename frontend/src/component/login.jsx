@@ -29,13 +29,14 @@ const Login = () => {
     try {
       setLoading(true);
       const response = await axios.post(
-        "http://localhost:8000/auth/login",
+        `${import.meta.env.VITE_BASE_URL}/auth/login`,
         formData
       );
 
       if (response.data.success) {
-        localStorage.setItem("userId", response.data.user_id);
-        localStorage.setItem("sessionId", response.data.session_id);
+        localStorage.setItem("token", response.data.jwt_token);
+        localStorage.setItem("customer_id", response.data.customer_id);
+        localStorage.setItem("user_id", response.data.user_id);
         navigate("/dashboard");
       } else {
         setError(response.data.message || "Login failed");

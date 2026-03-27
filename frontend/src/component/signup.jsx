@@ -40,7 +40,7 @@ const SignUp = () => {
       setLoading(true);
 
       const response = await axios.post(
-        "http://localhost:8000/api/auth/signup",
+        `${import.meta.env.VITE_BASE_URL}/auth/signup`,
         formData
       );
 
