@@ -238,3 +238,87 @@ CONFLICT_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", CONFLICT_EXTRACTION_SYSTEM_PROMPT),
     ("human", CONFLICT_EXTRACTION_USER_PROMPT),
 ])
+
+
+# ============================================================================
+# FIELD CLASSIFICATION PROMPTS (For handle_memory_update - Decide WHERE to store)
+# ============================================================================
+
+FIELD_CLASSIFICATION_SYSTEM_PROMPT = """You are a data classification system for a loan platform.
+
+Your job is to analyze customer information and classify it into two categories:
+
+1. **SCHEMA_FIELD**: Structured data that matches our database schema
+   - Examples: monthly_income, employment, cibil_score, loan_amount, full_name, address
+   - Store in: SQLite (with type validation)
+   - Characteristics: Factual, specific, well-defined field
+
+2. **CONTEXTUAL_INFO**: Behavioral/preference/situational data NOT in schema
+   - Examples: communication preferences, concerns, moods, intent, future plans
+   - Store in: ChromaDB (as semantic embeddings)
+   - Characteristics: Nuanced, conversational, contextual
+
+Database Schema Fields Available:
+- Structured: monthly_income, cibil_score, employment, total_work_experience_years, 
+             loan_amount, tenure_months, number_of_active_loans
+- Personal: full_name, date_of_birth, primary_phone, current_address, city, state, pincode
+- Relations: co_applicants, guarantors
+- Loan: loan_type, loan_purpose, loan_request
+
+For each piece of information, determine:
+1. Is it in the schema? (YES → SCHEMA_FIELD | NO → CONTEXTUAL_INFO)
+2. What is the field name (if schema)?
+3. What is the semantic meaning (if contextual)?"""
+
+FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information.
+
+CUSTOMER STATEMENT:
+"{user_input}"
+
+For each piece of information mentioned, classify it:
+- If it matches our schema → field name and value
+- If it's contextual → semantic meaning and category
+
+Provide classification in JSON format."""
+
+FIELD_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", FIELD_CLASSIFICATION_SYSTEM_PROMPT),
+    ("human", FIELD_CLASSIFICATION_USER_PROMPT),
+])
+
+
+# ============================================================================
+# ENTITY EXTRACTION PROMPTS (Extract structured data from user input)
+# ============================================================================
+
+ENTITY_EXTRACTION_SYSTEM_PROMPT = """You are an entity extraction system for a loan platform.
+
+Your job is to extract structured entities from customer conversations.
+
+EXTRACT:
+1. All factual information (income, employment, etc.)
+2. Contextual information (preferences, concerns, plans)
+3. For each, provide:
+   - Raw value (exactly as customer said)
+   - Normalized value (cleaned, typed, validated)
+   - Confidence (0.0-1.0)
+   - Category (income | employment | personal | communication | concern | intent | other)
+   - Should be stored in: SQLite or ChromaDB"""
+
+ENTITY_EXTRACTION_USER_PROMPT = """Extract all entities from this customer statement.
+
+CUSTOMER STATEMENT:
+"{user_input}"
+
+For each entity, determine:
+1. Raw value (exact text from customer)
+2. Normalized value (cleaned/processed)
+3. Type (string, number, date, etc.)
+4. Category (income, employment, personal, communication, concern, intent, other)
+5. Storage target (SQLite or ChromaDB)
+6. Confidence (0.0-1.0)"""
+
+ENTITY_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", ENTITY_EXTRACTION_SYSTEM_PROMPT),
+    ("human", ENTITY_EXTRACTION_USER_PROMPT),
+])
