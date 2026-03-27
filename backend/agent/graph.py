@@ -143,10 +143,8 @@ async def run_session(initial_state: SessionState) -> SessionState:
         # Stream execution for debugging
         final_state = initial_state.copy()
         
-        # Execute graph (invoke returns final state)
-        # For async compatibility, we'll use sync mode for now
-        # In production, use graph.invoke() or astream()
-        result = graph.invoke(initial_state)
+        # Execute graph (ainvoke for async nodes)
+        result = await graph.ainvoke(initial_state)
         
         logger.info(f"✅ Session complete: {result.get('session_id')}")
         
