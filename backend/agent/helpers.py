@@ -2,9 +2,10 @@
 Helper functions for LLM-based analysis and classification.
 
 Functions:
+- create_llm: Factory function for consistent ChatOllama initialization
+- format_conversation_history: Format message history for LLM context
 - extract_conflicts_with_llm: Detect conflicts between user input and confirmed facts
 - classify_fields_with_llm: Classify fields as schema or contextual information
-- format_conversation_history: Format message history for LLM context
 """
 
 import sys
@@ -18,9 +19,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent.schemas import ConflictExtractionResult, FieldClassification, FieldClassificationResult
 from agent.prompts import CONFLICT_EXTRACTION_PROMPT, FIELD_CLASSIFICATION_PROMPT
-from config import OLLAMA_MODEL, OLLAMA_BASE_URL
+from config import OLLAMA_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT
 
 logger = logging.getLogger(__name__)
+
+
+def create_llm(temperature: float = 0.3, timeout: int = None) -> ChatOllama:
+    """
+    Factory function to create consistently configured ChatOllama instances.
+    
+    Args:
+        temperature: Temperature for response generation (0.0-1.0)
+        timeout: Request timeout in seconds (default from config)
+    
+    Returns:
+        Configured ChatOllama instance ready for use
+    """
+    if timeout is None:
+        timeout = OLLAMA_TIMEOUT
+    
+    return ChatOllama(
+        model=OLLAMA_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        temperature=temperature,
+        timeout=timeout,
+        format="json",  # Request JSON output for structured parsing
+    )
 
 
 def format_conversation_history(messages: List[Dict[str, str]], max_turns: int = 5) -> str:
@@ -74,11 +98,7 @@ async def extract_conflicts_with_llm(
         context_summary = "\n".join(dynamic_context[:3]) if dynamic_context else "No context available"
         
         # Create LLM chain for conflict extraction
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.2,  # Lower temp for precise analysis
-        )
+        llm = create_llm(temperature=0.2)  # Lower temp for precise analysis
         
         structured_llm = llm.with_structured_output(ConflictExtractionResult)
         chain = CONFLICT_EXTRACTION_PROMPT | structured_llm
@@ -120,11 +140,7 @@ async def classify_fields_with_llm(user_input: str) -> Dict[str, FieldClassifica
         {field_name: FieldClassification} for each classified field
     """
     try:
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.2,
-        )
+        llm = create_llm(temperature=0.2)
         
         structured_llm = llm.with_structured_output(FieldClassificationResult)
         chain = FIELD_CLASSIFICATION_PROMPT | structured_llm

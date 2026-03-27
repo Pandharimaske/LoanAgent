@@ -13,7 +13,6 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,11 +24,11 @@ from agent.prompts import (
     MISMATCH_VERIFICATION_PROMPT,
 )
 from agent.schemas import SchemaFieldValidator
-from agent.helpers import classify_fields_with_llm
+from agent.helpers import classify_fields_with_llm, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.models import FixedEntity, MemoryStatus
-from config import SQLITE_PATH, CHROMA_PATH, OLLAMA_MODEL, OLLAMA_BASE_URL
+from config import SQLITE_PATH, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -306,11 +305,7 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
         # ====================================================================
         # INVOKE MISMATCH VERIFICATION PROMPT WITH LLM
         # ====================================================================
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.5,  # Balanced - professional but warm
-        )
+        llm = create_llm(temperature=0.5)  # Balanced - professional but warm
         
         chain = MISMATCH_VERIFICATION_PROMPT | llm
         
@@ -363,11 +358,7 @@ async def handle_query(state: SessionState) -> SessionState:
         context_summary = "\n".join(context) if context else "No available context"
         
         # Create LLM chain
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.3,
-        )
+        llm = create_llm(temperature=0.3)  # Lower temp for factual responses
         
         # Use the query prompt from prompts.py
         chain = QUERY_ANSWER_CHAT_PROMPT | llm
@@ -415,11 +406,7 @@ async def handle_general(state: SessionState) -> SessionState:
         context_summary = "\n".join(context) if context else "No previous context"
         
         # Create LLM chain
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.7,  # Slightly higher for conversational tone
-        )
+        llm = create_llm(temperature=0.7)  # Slightly higher for conversational tone
         
         # Use the general response prompt from prompts.py
         chain = GENERAL_RESPONSE_PROMPT | llm

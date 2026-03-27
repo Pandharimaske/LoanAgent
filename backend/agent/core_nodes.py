@@ -13,22 +13,19 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent.state import SessionState
 from agent.prompts import ROUTER_PROMPT
 from agent.schemas import RouterDecision
-from agent.helpers import extract_conflicts_with_llm, format_conversation_history
+from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.models import MemoryStatus
 from config import (
     SQLITE_PATH,
     CHROMA_PATH,
-    OLLAMA_MODEL,
-    OLLAMA_BASE_URL,
     TOKEN_THRESHOLD_PERCENT,
     SESSION_CONTEXT_WINDOW,
     VECTOR_SEARCH_TOP_K,
@@ -199,12 +196,8 @@ async def router(state: SessionState) -> SessionState:
         # ====================================================================
         # CONFIGURE LLM WITH STRUCTURED OUTPUT
         # ====================================================================
-        # Initialize base LLM
-        base_llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.3,
-        )
+        # Initialize base LLM with consistent configuration
+        base_llm = create_llm(temperature=0.3)
         
         # Bind Pydantic schema to LLM - ensures responses are validated/parsed automatically
         # This is better than manual JSON parsing because:
