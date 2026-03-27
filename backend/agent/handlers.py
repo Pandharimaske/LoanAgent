@@ -375,20 +375,14 @@ async def handle_query(state: SessionState) -> SessionState:
     """
     try:
         user_input       = state.get("user_input", "")
-        memory_block     = state.get("memory_prompt_block") or ""
-        customer_facts   = state.get("customer_facts", {})
-        context          = state.get("dynamic_context", [])[:3]
-
-        facts_summary    = json.dumps(customer_facts, indent=2) if customer_facts else "No customer profile yet."
-        context_summary  = memory_block if memory_block else "\n".join(context) if context else "No relevant context."
+        memory_context   = state.get("memory_prompt_block", "No context available")
 
         llm   = create_llm(temperature=0.2)
         chain = QUERY_ANSWER_CHAT_PROMPT | llm
 
         response = await chain.ainvoke({
             "user_input":      user_input,
-            "facts_summary":   facts_summary,
-            "context_summary": context_summary,
+            "memory_context":  memory_context,
         })
 
         answer = response.content if hasattr(response, "content") else str(response)
@@ -417,20 +411,14 @@ async def handle_general(state: SessionState) -> SessionState:
     """
     try:
         user_input      = state.get("user_input", "")
-        memory_block    = state.get("memory_prompt_block") or ""
-        customer_facts  = state.get("customer_facts", {})
-        context         = state.get("dynamic_context", [])[:2]
-
-        facts_summary   = json.dumps(customer_facts, indent=2) if customer_facts else "No customer profile yet."
-        context_summary = memory_block if memory_block else "\n".join(context) if context else "No previous context."
+        memory_context  = state.get("memory_prompt_block", "No context available")
 
         llm   = create_llm(temperature=0.7)
         chain = GENERAL_RESPONSE_PROMPT | llm
 
         response = await chain.ainvoke({
             "user_input":      user_input,
-            "facts_summary":   facts_summary,
-            "context_summary": context_summary,
+            "memory_context":  memory_context,
         })
 
         answer = response.content if hasattr(response, "content") else str(response)

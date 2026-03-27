@@ -259,11 +259,10 @@ async def router(state: SessionState) -> SessionState:
             return state
 
         # Prepare context strings for the prompt
-        facts_summary   = json.dumps(customer_facts, indent=2) if customer_facts else "No facts on file yet"
-        context_summary = "\n".join(dynamic_context[:3]) if dynamic_context else "No relevant context"
         messages        = state.get("messages") or []
         # Exclude the current message (last item) from history shown to router
         conv_history    = format_conversation_history(messages[:-1])
+        memory_context  = state.get("memory_prompt_block", "No context available")
 
         # Structured LLM chain
         base_llm       = create_llm(temperature=0.3)
@@ -272,8 +271,7 @@ async def router(state: SessionState) -> SessionState:
 
         decision: RouterDecision = await chain.ainvoke({
             "user_input":           user_input,
-            "facts_summary":        facts_summary,
-            "context_summary":      context_summary,
+            "memory_context":       memory_context,
             "conversation_history": conv_history,
         })
 

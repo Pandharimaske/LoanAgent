@@ -141,11 +141,8 @@ PREVIOUS CONVERSATION:
 
 CUSTOMER SAID: {user_input}
 
-KNOWN CUSTOMER FACTS:
-{facts_summary}
-
-RELEVANT CONTEXT (Historical Information):
-{context_summary}
+MEMORY CONTEXT:
+{memory_context}
 
 ---
 
@@ -179,11 +176,8 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 
 QUERY_ANSWER_PROMPT = PromptTemplate.from_template("""You are a helpful loan officer assisting customers with their inquiries.
 
-CUSTOMER PROFILE:
-{facts_summary}
-
-RELEVANT CONTEXT:
-{context_summary}
+MEMORY CONTEXT:
+{memory_context}
 
 CUSTOMER'S QUESTION:
 {user_input}
@@ -195,11 +189,8 @@ QUERY_ANSWER_CHAT_PROMPT = ChatPromptTemplate.from_messages([
     ("system", "You are a helpful loan officer assistant. Answer customer questions accurately using provided facts and context."),
     ("human", """You are a helpful loan officer assisting customers with their inquiries.
 
-CUSTOMER PROFILE:
-{facts_summary}
-
-RELEVANT CONTEXT:
-{context_summary}
+MEMORY CONTEXT:
+{memory_context}
 
 CUSTOMER'S QUESTION:
 {user_input}
@@ -218,11 +209,8 @@ GENERAL_RESPONSE_PROMPT = ChatPromptTemplate.from_messages([
 You help customers with their loan applications and inquiries.
 Use the customer's profile information to personalize your responses when relevant.
 Be warm, helpful, and professional in every interaction."""),
-    ("human", """CUSTOMER PROFILE:
-{facts_summary}
-
-RECENT CONTEXT:
-{context_summary}
+    ("human", """MEMORY CONTEXT:
+{memory_context}
 
 CUSTOMER MESSAGE:
 {user_input}
@@ -445,9 +433,8 @@ For each entity found:
 2. Raw value (exact customer words)
 3. Normalized value (cleaned/validated)
 4. Data type
-5. Status (pending/confirmed - usually "pending" for new info)
-6. Confidence (0.0-1.0)
-7. Any validation notes (format issues, type conversion, etc.)
+5. Confidence (0.0-1.0)
+6. Any validation notes (format issues, type conversion, etc.)
 
 Return as structured data."""
 
