@@ -5,18 +5,26 @@ Password hashing and JWT token utilities for user authentication.
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 import secrets
 import hashlib
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from config import JWT_SECRET, JWT_EXPIRES_HOURS
+
 try:
     import bcrypt
 except ImportError:
     print("⚠️  bcrypt not installed. Run: pip install bcrypt")
     bcrypt = None
+
+try:
+    import jwt
+except ImportError:
+    print("⚠️  PyJWT not installed. Run: pip install pyjwt")
+    jwt = None
 
 
 class PasswordManager:
@@ -134,6 +142,81 @@ class TokenManager:
             return datetime.now() > expires
         except Exception:
             return True
+
+    @staticmethod
+    def create_jwt_token(
+        user_id: str,
+        email: str,
+        customer_id: Optional[str] = None,
+        expires_in_hours: int = None,
+    ) -> str:
+        """
+        Create a JWT token.
+        
+        Args:
+            user_id: User ID
+            email: User email
+            customer_id: Optional customer ID
+            expires_in_hours: Hours until token expires (defaults to JWT_EXPIRES_HOURS)
+            
+        Returns:
+            Signed JWT token
+            
+        Raises:
+            RuntimeError: If JWT secret not configured or PyJWT not available
+        """
+        if not jwt:
+            raise RuntimeError("PyJWT not installed")
+        
+        if not JWT_SECRET:
+            raise RuntimeError("JWT_SECRET not configured in environment")
+        
+        if expires_in_hours is None:
+            expires_in_hours = JWT_EXPIRES_HOURS
+        
+        now = datetime.now()
+        expires_at = now + timedelta(hours=expires_in_hours)
+        
+        payload = {
+            "user_id": user_id,
+            "email": email,
+            "customer_id": customer_id,
+            "iat": now,
+            "exp": expires_at,
+        }
+        
+        token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+        return token
+
+    @staticmethod
+    def verify_jwt_token(token: str) -> Optional[Dict[str, Any]]:
+        """
+        Verify and decode a JWT token.
+        
+        Args:
+            token: JWT token to verify
+            
+        Returns:
+            Decoded payload dict if valid, None if invalid/expired
+        """
+        if not jwt:
+            raise RuntimeError("PyJWT not installed")
+        
+        if not JWT_SECRET:
+            raise RuntimeError("JWT_SECRET not configured")
+        
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            return payload
+        except jwt.ExpiredSignatureError:
+            print("⏰ Token has expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            print(f"🔴 Invalid token: {e}")
+            return None
+        except Exception as e:
+            print(f"🔴 Token verification error: {e}")
+            return None
 
 
 class UserIDGenerator:
