@@ -275,16 +275,16 @@ export default function DashboardPage() {
                     : "20px 20px 20px 4px",
                   ...(msg.role === "user"
                     ? {
-                        background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
-                        color: "#fff",
-                        boxShadow: "0 6px 24px rgba(59,130,246,0.35)",
-                      }
+                      background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+                      color: "#fff",
+                      boxShadow: "0 6px 24px rgba(59,130,246,0.35)",
+                    }
                     : {
-                        background: "rgba(255,255,255,0.06)",
-                        color: "#e2e8f0",
-                        border: "1px solid rgba(255,255,255,0.09)",
-                        boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
-                      }),
+                      background: "rgba(255,255,255,0.06)",
+                      color: "#e2e8f0",
+                      border: "1px solid rgba(255,255,255,0.09)",
+                      boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+                    }),
                 }}>
                   {msg.text}
                 </div>
