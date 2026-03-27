@@ -174,8 +174,8 @@ export default function DashboardPage() {
               <ShieldCheck size={22} color="#fff" />
             </div>
             <div>
-              <span style={styles.brandName}>BrainBack</span>
-              <span style={styles.brandTag}> Secure</span>
+              <span style={styles.brandName}>BrainBack.AI</span>
+             
             </div>
           </div>
         </div>
