@@ -27,8 +27,7 @@ class SessionState(TypedDict, total=False):
     # SESSION METADATA
     # =============================
     session_id: str
-    customer_id: str
-    user_id: str
+    customer_id: str  # Single ID - represents the customer
     started_at: datetime
     
     # =============================

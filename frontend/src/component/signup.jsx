@@ -39,14 +39,14 @@ const SignUp = () => {
     try {
       setLoading(true);
 
+      // Use VITE_BASE_URL env var, correct backend endpoint is /auth/register
       const response = await axios.post(
-        "http://localhost:8000/auth/register",
+        `${import.meta.env.VITE_BASE_URL}/auth/register`,
         { email, name, password }
       );
 
       if (response.data.success) {
         localStorage.setItem("userId", response.data.user_id || "");
-        // After registration, go to login
         navigate("/login");
       } else {
         setError(response.data.message || "Registration failed");
