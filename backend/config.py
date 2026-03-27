@@ -56,6 +56,10 @@ SESSION_CONTEXT_WINDOW = int(os.getenv("SESSION_CONTEXT_WINDOW", "4096"))
 MAX_SESSION_TURNS = int(os.getenv("MAX_SESSION_TURNS", "50"))
 VECTOR_SEARCH_TOP_K = int(os.getenv("VECTOR_SEARCH_TOP_K", "5"))
 
+# Token compression thresholds
+TOKEN_THRESHOLD_PERCENT = float(os.getenv("TOKEN_THRESHOLD_PERCENT", "0.80"))  # 80% of context window
+TOKEN_TARGET_PERCENT = float(os.getenv("TOKEN_TARGET_PERCENT", "0.50"))  # Compress to 50% after summarization
+
 # ============================================================================
 # LANGUAGE & NLP
 # ============================================================================
@@ -98,6 +102,8 @@ def print_config():
     print(f"   TOKEN_THRESHOLD:        {TOKEN_THRESHOLD}")
     print(f"   SESSION_CONTEXT_WINDOW: {SESSION_CONTEXT_WINDOW}")
     print(f"   VECTOR_SEARCH_TOP_K:    {VECTOR_SEARCH_TOP_K}")
+    print(f"   TOKEN_THRESHOLD_PERCENT: {TOKEN_THRESHOLD_PERCENT * 100}%")
+    print(f"   TOKEN_TARGET_PERCENT:    {TOKEN_TARGET_PERCENT * 100}%")
     
     print("\n🗣️  Language:")
     print(f"   DEFAULT_LANGUAGE:    {DEFAULT_LANGUAGE}")
