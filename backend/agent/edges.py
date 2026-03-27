@@ -21,7 +21,8 @@ def route_to_handler(state: SessionState) -> str:
     Router decides which handler to invoke based on state.
     
     Logic:
-    - If has_mismatch=True → "handle_memory_update"
+    - If has_mismatch=True → "handle_mismatch_confirmation"
+    - Else if user providing new info → "handle_memory_update"
     - Else if detected_intent in [query_loan, ask_status] → "handle_query"
     - Else → "handle_general"
     
@@ -42,6 +43,7 @@ CONDITIONAL_EDGES = [
         "router",
         route_to_handler,
         {
+            "handle_mismatch_confirmation": "handle_mismatch_confirmation",
             "handle_memory_update": "handle_memory_update",
             "handle_query": "handle_query",
             "handle_general": "handle_general",

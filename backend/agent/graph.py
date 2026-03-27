@@ -12,12 +12,13 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph
 from agent.state import SessionState
 from agent.nodes import (
     check_token_threshold,
     load_memory,
     router,
+    handle_mismatch_confirmation,
     handle_memory_update,
     handle_query,
     handle_general,
@@ -48,12 +49,13 @@ def build_graph():
     graph.add_node("check_token_threshold", check_token_threshold)
     graph.add_node("load_memory", load_memory)
     graph.add_node("router", router)
+    graph.add_node("handle_mismatch_confirmation", handle_mismatch_confirmation)
     graph.add_node("handle_memory_update", handle_memory_update)
     graph.add_node("handle_query", handle_query)
     graph.add_node("handle_general", handle_general)
     graph.add_node("end_session", end_session)
     
-    logger.info("✅ Added 7 nodes (new flow order)")
+    logger.info("✅ Added 8 nodes (mismatch handler added)")
     
     # ========================================================================
     # ADD LINEAR EDGES
@@ -66,11 +68,12 @@ def build_graph():
     graph.add_edge("load_memory", "router")
     
     # All handlers go to end_session
+    graph.add_edge("handle_mismatch_confirmation", "end_session")
     graph.add_edge("handle_memory_update", "end_session")
     graph.add_edge("handle_query", "end_session")
     graph.add_edge("handle_general", "end_session")
     
-    logger.info("✅ Added 5 linear edges")
+    logger.info("✅ Added 6 linear edges")
     
     # ========================================================================
     # ADD CONDITIONAL EDGES
@@ -136,9 +139,6 @@ async def run_session(initial_state: SessionState) -> SessionState:
         graph = get_graph()
         
         logger.info(f"🚀 Running session: {initial_state.get('session_id')}")
-        
-        # Stream execution for debugging
-        final_state = initial_state.copy()
         
         # Execute graph (ainvoke for async nodes)
         result = await graph.ainvoke(initial_state)
