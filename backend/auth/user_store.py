@@ -269,9 +269,6 @@ class UserDatabase:
                 username=user_data["username"],
                 email=user_data["email"],
                 name=user_data["name"],
-                role=UserRole(user_data["role"]),
-                status=UserStatus(user_data["status"]),
-                is_verified=bool(user_data["is_verified"]),
                 customer_id=user_data["customer_id"],
                 created_at=datetime.fromisoformat(user_data["created_at"]),
                 last_login=datetime.fromisoformat(user_data["last_login"])
