@@ -94,7 +94,7 @@ async def load_memory(state: SessionState) -> SessionState:
         # Load from SQLite
         db = MemoryDatabase(db_path=SQLITE_PATH)
         db.connect()
-        memory = db.load_memory(customer_id)
+        memory = db.load_customer_memory(customer_id)
         db.close()
         
         confirmed_facts = {}
@@ -169,7 +169,7 @@ Return JSON:
 }}"""
         
         client = OllamaClient()
-        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt, model=OLLAMA_MODEL)
         
         try:
             result = json.loads(response)
@@ -283,7 +283,7 @@ QUESTION: {user_input}
 Answer:"""
         
         client = OllamaClient()
-        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt, model=OLLAMA_MODEL)
         
         state["query_response"] = response
         state["agent_response"] = response
@@ -320,7 +320,7 @@ USER: {user_input}
 Response:"""
         
         client = OllamaClient()
-        response = await client.generate_async(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt, model=OLLAMA_MODEL)
         
         state["agent_response"] = response
         logger.info("💬 Response sent")
@@ -354,13 +354,13 @@ async def end_session(state: SessionState) -> SessionState:
         
         # Store to ChromaDB
         vs = VectorStore(persist_path=CHROMA_PATH)
-        vs.add(
+        vs.add_chunk(
             customer_id=customer_id,
-            documents=[agent_response[:500]],
-            metadatas=[{
+            text=agent_response[:500],
+            metadata={
                 "session_id": session_id,
                 "timestamp": datetime.now().isoformat()
-            }],
+            },
         )
         
         logger.info(f"✅ Session persisted")
