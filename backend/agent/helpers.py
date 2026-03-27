@@ -43,7 +43,11 @@ def create_llm(temperature: float = 0.3, timeout: int = None) -> ChatOllama:
         base_url=OLLAMA_BASE_URL,
         temperature=temperature,
         timeout=timeout,
-        format="json",  # Request JSON output for structured parsing
+        # NOTE: Do NOT set format="json" here.
+        # with_structured_output() passes a full JSON Schema object as the
+        # Ollama `format` param. Simultaneously setting format="json" (a plain
+        # string) causes Ollama to reject the request with:
+        #   "invalid JSON schema in format" (status 500)
     )
 
 

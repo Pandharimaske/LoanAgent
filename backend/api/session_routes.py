@@ -126,10 +126,33 @@ async def send_message(request: MessageRequest):
         MessageResponse with agent response and state updates
     """
     try:
+        # Resolve real customer_id from the authenticated session
+        customer_id = "demo_customer"  # last-resort fallback
+        try:
+            import hashlib
+            db = UserDatabase(db_path=SQLITE_PATH)
+            db.connect()
+            user_session = db.get_session(request.session_id)
+            if user_session and user_session.customer_id:
+                # Happy path: customer_id stored at registration
+                customer_id = user_session.customer_id
+            elif user_session:
+                # Legacy user registered before the customer_id fix.
+                # Re-derive the same deterministic CUST_ id from email so the
+                # data bucket is consistent with any future registrations.
+                user = db.get_user(user_session.user_id)
+                if user and user.email:
+                    customer_id = "CUST_" + hashlib.sha256(user.email.lower().encode()).hexdigest()[:8].upper()
+                else:
+                    customer_id = f"CUST_{user_session.user_id[-8:].upper()}"
+            db.close()
+        except Exception:
+            pass  # keep fallback
+
         # Initialize state
         initial_state: SessionState = {
             "session_id": request.session_id,
-            "customer_id": "demo_customer",  # TODO: Get from session lookup
+            "customer_id": customer_id,
             "user_input": request.user_input,
             "language": request.language,
             "started_at": datetime.now(),

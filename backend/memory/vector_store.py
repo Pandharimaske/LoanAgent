@@ -236,6 +236,7 @@ class VectorStore:
         topic_tag: Optional[str] = None,
         turn_index: Optional[int] = None,
         chunk_id: Optional[str] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Store a conversation chunk (a fact, turn, or extracted info).
@@ -247,6 +248,7 @@ class VectorStore:
             topic_tag: Optional topic tag (e.g., "income", "guarantor").
             turn_index: Position in the conversation.
             chunk_id: Custom ID. If None, auto-generated.
+            extra_metadata: Optional extra key-value pairs merged into metadata.
 
         Returns:
             Document ID of the stored chunk.
@@ -271,6 +273,11 @@ class VectorStore:
             metadata["topic_tag"] = topic_tag
         if turn_index is not None:
             metadata["turn_index"] = turn_index
+
+        # Merge caller-supplied extra metadata (string values only — ChromaDB requirement)
+        if extra_metadata:
+            for k, v in extra_metadata.items():
+                metadata[k] = str(v) if not isinstance(v, (str, int, float, bool)) else v
 
         collection.upsert(
             ids=[chunk_id],
@@ -326,9 +333,12 @@ class VectorStore:
             where_filter = {"$and": conditions}
 
         try:
+            # ChromaDB raises an error when querying a collection with 0 docs
+            if collection.count() == 0:
+                return []
             results = collection.query(
                 query_texts=[query_text],
-                n_results=n_results,
+                n_results=min(n_results, collection.count()),
                 where=where_filter,
             )
         except Exception as e:

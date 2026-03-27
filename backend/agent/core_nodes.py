@@ -22,6 +22,7 @@ from agent.schemas import RouterDecision
 from agent.helpers import extract_conflicts_with_llm, format_conversation_history, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
+from memory.models import SessionLog
 from config import (
     SQLITE_PATH,
     CHROMA_PATH,
@@ -307,15 +308,35 @@ async def end_session(state: SessionState) -> SessionState:
         db = MemoryDatabase(db_path=SQLITE_PATH)
         db.connect()
         
+        messages = state.get("messages", [])
+        
         try:
-            messages = state.get("messages", [])
+            # Ensure customer row exists in customer_memory_nonpii to satisfy
+            # the FOREIGN KEY constraint on session_log.customer_id.
+            if not db.customer_exists(customer_id):
+                from memory.models import CustomerMemoryNonPII, CustomerMemoryPII
+                placeholder_nonpii = CustomerMemoryNonPII(
+                    customer_id=customer_id,
+                    created_at=datetime.now(),
+                    last_updated=datetime.now(),
+                )
+                placeholder_pii = CustomerMemoryPII(
+                    customer_id=customer_id,
+                    created_at=datetime.now(),
+                    last_updated=datetime.now(),
+                )
+                db.save_customer_memory(placeholder_nonpii, placeholder_pii)
+                logger.info(f"📋 Created placeholder customer record for {customer_id}")
             
-            # Save session metadata
-            db.save_session(
+            # Construct SessionLog object (save_session expects a model instance)
+            session_log = SessionLog(
                 session_id=session_id,
                 customer_id=customer_id,
-                turns=messages
+                started_at=datetime.now(),
+                ended_at=datetime.now(),
+                turns=messages,
             )
+            db.save_session(session_log)
             logger.info(f"📋 Recorded {len(messages)} turns to session_log")
             
         except Exception as e:

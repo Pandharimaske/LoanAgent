@@ -120,12 +120,19 @@ async def register(
         # Generate username from email (part before @)
         username = request.email.split("@")[0]
         
+        # Generate a deterministic customer_id from email so it is stable across
+        # logins and correctly scopes the user's data in SQLite + ChromaDB.
+        # Format: CUST_<first 8 hex chars of SHA256(email)>
+        import hashlib
+        customer_id = "CUST_" + hashlib.sha256(request.email.lower().encode()).hexdigest()[:8].upper()
+        
         # Register user
         success, user_id, error = db.register_user(
             username=username,
             email=request.email,
             name=request.name,
             password=request.password,
+            customer_id=customer_id,
         )
 
         if not success:

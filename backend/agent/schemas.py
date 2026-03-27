@@ -9,8 +9,12 @@ Organized by concern:
 - Routing: RouterDecision
 """
 
-from typing import Any, Literal, Optional
+from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field
+
+# Ollama's JSON schema validator rejects `Any` (serialized as `{}` with no type).
+# Use a concrete Union so Ollama receives a valid `anyOf` constraint.
+ScalarValue = Union[str, float, int, bool, None]
 
 
 # ============================================================================
@@ -20,8 +24,8 @@ from pydantic import BaseModel, Field
 class ConflictDetail(BaseModel):
     """Details of a single conflicting field."""
     field: str = Field(..., description="Field name that has conflict")
-    old_value: Any = Field(..., description="Previously confirmed value")
-    new_value: Any = Field(..., description="New value from customer")
+    old_value: ScalarValue = Field(..., description="Previously confirmed value")
+    new_value: ScalarValue = Field(..., description="New value from customer")
     confidence: float = Field(..., description="Confidence of conflict detection (0.0-1.0)")
     explanation: str = Field(..., description="Why this conflict matters")
 
@@ -42,7 +46,7 @@ class FieldClassification(BaseModel):
     raw_value: str = Field(..., description="Original customer input")
     field_type: str = Field(..., description="SCHEMA_FIELD or CONTEXTUAL_INFO")
     field_name: str = Field(..., description="Schema field name if SCHEMA_FIELD, else semantic description")
-    normalized_value: Any = Field(default=None, description="Normalized value for schema fields")
+    normalized_value: ScalarValue = Field(default=None, description="Normalized value for schema fields")
     category: str = Field(..., description="Category (income, employment, etc.)")
 
 
@@ -59,7 +63,7 @@ class FieldClassificationResult(BaseModel):
 class ExtractedEntity(BaseModel):
     """Single extracted entity from customer input."""
     raw_value: str = Field(..., description="Exact text from customer")
-    normalized_value: Any = Field(..., description="Cleaned/processed value")
+    normalized_value: ScalarValue = Field(..., description="Cleaned/processed value")
     value_type: str = Field(..., description="Data type (string, number, date, etc.)")
     category: str = Field(..., description="income | employment | personal | communication | concern | intent | other")
     storage_target: str = Field(..., description="SQLite or ChromaDB")

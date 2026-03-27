@@ -101,7 +101,8 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                     "field_name": field_name,
                     "value": normalized_value,
                     "original": classification.raw_value,
-                    "confidence": classification.confidence,
+                    # FieldClassification has no confidence field; default to 1.0
+                    "confidence": getattr(classification, "confidence", 1.0),
                 }
                 logger.debug(f"      ✅ Valid: {normalized_value}")
                 
@@ -197,6 +198,21 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                 nonpii.last_updated = datetime.now()
                 pii.last_updated = datetime.now()
                 
+                # Ensure session row exists in session_log BEFORE logging field changes.
+                # field_change_log has FK: session_id → session_log(session_id).
+                # end_session saves the full session later; here we just upsert a stub.
+                from memory.models import SessionLog as _SessionLog
+                _stub = _SessionLog(
+                    session_id=session_id,
+                    customer_id=customer_id,
+                    started_at=datetime.now(),
+                    turns=[],
+                )
+                try:
+                    db.save_session(_stub)
+                except Exception:
+                    pass  # already exists or customer row missing — field log will be skipped
+                
                 # Save both tables to SQLite
                 db.save_customer_memory(nonpii, pii)
                 logger.info("✅ SQLite update complete (PII encrypted, NonPII plaintext)")
@@ -218,23 +234,22 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                     # Format semantic chunk
                     chunk_text = f"{classification.field_name}: {classification.raw_value}"
                     
-                    metadata = {
+                    extra_metadata = {
                         "type": "memory_update",
                         "category": classification.category,
-                        "customer_id": customer_id,
-                        "session_id": session_id,
-                        "timestamp": datetime.now().isoformat(),
                         "source": "handle_memory_update",
-                        "confidence": str(classification.confidence),
+                        # FieldClassification has no confidence field; default to 1.0
+                        "confidence": str(getattr(classification, "confidence", 1.0)),
                         "original_text": classification.raw_value,
                     }
                     
                     # Add to ChromaDB
                     vs.add_chunk(
                         customer_id=customer_id,
+                        session_id=session_id,
                         text=chunk_text,
-                        metadata=metadata,
                         topic_tag=classification.category,
+                        extra_metadata=extra_metadata,
                     )
                     logger.info(f"      ✅ {classification.category}: {chunk_text}")
                 
@@ -306,10 +321,11 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
         logger.info(f"   Fields: {list(mismatches.keys())}")
         
         if not mismatches:
-            # Fallback if no mismatches despite being routed here
-            state["agent_response"] = MEMORY_UPDATE_ACKNOWLEDGMENT
-            logger.warning("⚠️  No mismatches found despite routing to mismatch handler")
-            return state
+            # Router predicted a conflict but the second LLM pass found none.
+            # This happens when there are no confirmed facts yet to compare against.
+            # Treat it as a normal memory update so the data is not silently dropped.
+            logger.warning("⚠️  No mismatches found despite routing to mismatch handler — delegating to memory update")
+            return await handle_memory_update(state)
         
         # ====================================================================
         # BUILD MISMATCH DETAILS WITH EXPLANATIONS FROM LLM
