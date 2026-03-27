@@ -27,7 +27,7 @@ from agent.schemas import SchemaFieldValidator
 from agent.helpers import classify_fields_with_llm, create_llm
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
-from memory.models import FixedEntity, MemoryStatus
+from memory.models import FixedEntity, MemoryStatus, CustomerMemoryNonPII, CustomerMemoryPII
 from config import SQLITE_PATH, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                 logger.warning(f"      ❌ Invalid: {str(e)}")
         
         # ====================================================================
-        # STEP 3a: STORE SCHEMA FIELDS IN SQLITE
+        # STEP 3a: STORE SCHEMA FIELDS IN SQLITE (BOTH PII & NON-PII)
         # ====================================================================
         if valid_schema_fields:
             logger.info(f"💾 Storing {len(valid_schema_fields)} fields in SQLite...")
@@ -118,34 +118,60 @@ async def handle_memory_update(state: SessionState) -> SessionState:
             db.connect()
             
             try:
-                # Load existing customer memory
-                customer_memory = db.load_customer_memory(customer_id)
-                if not customer_memory:
-                    from memory.models import CustomerMemoryNonPII
-                    customer_memory = CustomerMemoryNonPII(
+                # Load existing customer memory (returns tuple: nonpii, pii)
+                nonpii, pii = db.load_customer_memory(customer_id)
+                
+                # If no existing memory, create new objects
+                if not nonpii:
+                    nonpii = CustomerMemoryNonPII(
                         customer_id=customer_id,
                         created_at=datetime.now(),
                         last_updated=datetime.now(),
                     )
                 
-                # Update each field
+                if not pii:
+                    pii = CustomerMemoryPII(
+                        customer_id=customer_id,
+                        created_at=datetime.now(),
+                        last_updated=datetime.now(),
+                    )
+                
+                # ====================================================================
+                # Map fields to PII vs NonPII
+                # ====================================================================
+                pii_fields = {
+                    'full_name', 'date_of_birth', 'gender', 'marital_status',
+                    'primary_phone', 'current_address', 'city', 'state', 'pincode',
+                    'employer_name', 'years_at_current_job'
+                }
+                
+                # Update each field (to appropriate table)
                 for field_name, field_data in valid_schema_fields.items():
-                    if hasattr(customer_memory, field_name):
-                        entity = FixedEntity()
-                        entity.add_value(
-                            value=field_data["value"],
-                            session_id=session_id,
-                            status=MemoryStatus.CONFIRMED,
-                        )
-                        entity.confirm()
-                        setattr(customer_memory, field_name, entity)
-                        logger.info(f"      ✅ {field_name}: {field_data['value']}")
+                    entity = FixedEntity()
+                    entity.add_value(
+                        value=field_data["value"],
+                        session_id=session_id,
+                        status=MemoryStatus.CONFIRMED,
+                    )
+                    entity.confirm()
+                    
+                    if field_name in pii_fields:
+                        # Save to PII table (will be encrypted)
+                        if hasattr(pii, field_name):
+                            setattr(pii, field_name, entity)
+                            logger.info(f"      ✅ {field_name} → PII (encrypted)")
+                    else:
+                        # Save to NonPII table (plaintext)
+                        if hasattr(nonpii, field_name):
+                            setattr(nonpii, field_name, entity)
+                            logger.info(f"      ✅ {field_name} → NonPII (plaintext)")
                 
-                customer_memory.last_updated = datetime.now()
+                nonpii.last_updated = datetime.now()
+                pii.last_updated = datetime.now()
                 
-                # Save to SQLite
-                db.save_customer_memory(customer_id, customer_memory)
-                logger.info("✅ SQLite update complete")
+                # Save both tables to SQLite
+                db.save_customer_memory(nonpii, pii)
+                logger.info("✅ SQLite update complete (PII encrypted, NonPII plaintext)")
                 
             except Exception as e:
                 logger.error(f"❌ SQLite storage failed: {e}")
