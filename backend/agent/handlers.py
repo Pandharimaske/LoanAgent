@@ -147,6 +147,20 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                 
                 # Update each field (to appropriate table)
                 for field_name, field_data in valid_schema_fields.items():
+                    # Get old value for audit trail
+                    old_value = None
+                    if field_name in pii_fields:
+                        if hasattr(pii, field_name) and getattr(pii, field_name):
+                            entity = getattr(pii, field_name)
+                            if entity.current:
+                                old_value = entity.current.value
+                    else:
+                        if hasattr(nonpii, field_name) and getattr(nonpii, field_name):
+                            entity = getattr(nonpii, field_name)
+                            if entity.current:
+                                old_value = entity.current.value
+                    
+                    # Create new confirmed entity
                     entity = FixedEntity()
                     entity.add_value(
                         value=field_data["value"],
@@ -165,6 +179,20 @@ async def handle_memory_update(state: SessionState) -> SessionState:
                         if hasattr(nonpii, field_name):
                             setattr(nonpii, field_name, entity)
                             logger.info(f"      ✅ {field_name} → NonPII (plaintext)")
+                    
+                    # Log field change for audit trail
+                    has_conflict = field_name in state.get("mismatched_fields", {})
+                    try:
+                        db.log_field_change(
+                            customer_id=customer_id,
+                            field_name=field_name,
+                            session_id=session_id,
+                            old_value=str(old_value) if old_value is not None else None,
+                            new_value=str(field_data["value"]),
+                            conflict_detected=has_conflict
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to log change for {field_name}: {e}")
                 
                 nonpii.last_updated = datetime.now()
                 pii.last_updated = datetime.now()

@@ -509,10 +509,10 @@ class MemoryDatabase:
 
     def get_confirmed_facts(self, customer_id: str) -> Dict[str, Any]:
         """
-        Retrieve only CONFIRMED facts from database using SQL JSON extraction.
-        Much simpler than full deserialization - just get the values.
+        Retrieve ONLY CONFIRMED facts from database using SQL JSON extraction.
+        Includes ALL fields: NonPII, PII (encrypted), and complex types.
         
-        Returns dict of {field_name: value} for all confirmed facts.
+        Returns dict of {field_name: value} for all confirmed + applicable facts.
         """
         self._ensure_connection()
         confirmed_facts = {}
@@ -521,9 +521,8 @@ class MemoryDatabase:
             cursor = self.connection.cursor()
             
             # ====================================================================
-            # SQL JSON EXTRACTION — NonPII fields
+            # SQL JSON EXTRACTION — NonPII fields (COMPLETE LIST)
             # ====================================================================
-            # Extract current.value from JSON where current.status == "confirmed"
             
             nonpii_fields = [
                 ("monthly_income_json", "monthly_income"),
@@ -543,13 +542,12 @@ class MemoryDatabase:
             if row:
                 r = dict(row)
                 
-                # Extract each field using JSON parsing
+                # Extract FixedEntity fields where status == "confirmed"
                 for col_name, field_name in nonpii_fields:
                     json_str = r.get(col_name)
                     if json_str:
                         try:
                             data = json.loads(json_str)
-                            # FixedEntity format: {"current": {value, status, ...}, "history": [...]}
                             if data and data.get("current", {}).get("status") == "confirmed":
                                 value = data["current"].get("value")
                                 if value is not None:
@@ -557,12 +555,35 @@ class MemoryDatabase:
                         except (json.JSONDecodeError, KeyError):
                             pass
                 
-                # Application status (not JSON)
+                # Extract complex list fields (not FixedEntity, just store directly)
+                if r.get("employment_history_json"):
+                    try:
+                        confirmed_facts["employment_history"] = json.loads(r["employment_history_json"])
+                    except json.JSONDecodeError:
+                        pass
+                
+                if r.get("documents_submitted_json"):
+                    try:
+                        confirmed_facts["documents_submitted"] = json.loads(r["documents_submitted_json"])
+                    except json.JSONDecodeError:
+                        pass
+                
+                if r.get("loan_request_json"):
+                    try:
+                        confirmed_facts["loan_request"] = json.loads(r["loan_request_json"])
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Application status (simple field)
                 if r.get("application_status"):
                     confirmed_facts["application_status"] = r["application_status"]
+                
+                # CIBIL last checked (date)
+                if r.get("cibil_last_checked"):
+                    confirmed_facts["cibil_last_checked"] = r["cibil_last_checked"]
             
             # ====================================================================
-            # SQL JSON EXTRACTION — PII fields (need decryption)
+            # SQL JSON EXTRACTION — PII fields (COMPLETE LIST - decrypted)
             # ====================================================================
             
             pii_fields = [
@@ -603,6 +624,28 @@ class MemoryDatabase:
                                     confirmed_facts[field_name] = value
                         except Exception as e:
                             logger.warning(f"⚠️  Failed to decrypt {field_name}: {e}")
+                
+                # Extract co_applicants (complex encrypted list)
+                if p.get("co_applicants_encrypted"):
+                    try:
+                        decrypted_json = self.encryption.decrypt(p["co_applicants_encrypted"])
+                        confirmed_facts["co_applicants"] = json.loads(decrypted_json)
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to decrypt co_applicants: {e}")
+                
+                # Extract guarantors (complex encrypted list)
+                if p.get("guarantors_encrypted"):
+                    try:
+                        decrypted_json = self.encryption.decrypt(p["guarantors_encrypted"])
+                        confirmed_facts["guarantors"] = json.loads(decrypted_json)
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to decrypt guarantors: {e}")
+                
+                # Extract document hashes (not encrypted, used for dedup)
+                if p.get("pan_hash"):
+                    confirmed_facts["pan_hash"] = p["pan_hash"]
+                if p.get("aadhaar_hash"):
+                    confirmed_facts["aadhaar_hash"] = p["aadhaar_hash"]
             
             return confirmed_facts
             

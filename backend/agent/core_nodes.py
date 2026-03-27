@@ -272,7 +272,10 @@ async def router(state: SessionState) -> SessionState:
 async def end_session(state: SessionState) -> SessionState:
     """
     Persist all updates to SQLite and ChromaDB.
-    Also adds agent response to message history for future context.
+    Also:
+    - Adds agent response to message history
+    - Records session in session_log with all turns
+    - Stores session summary to ChromaDB
     """
     try:
         customer_id = state.get("customer_id")
@@ -285,7 +288,9 @@ async def end_session(state: SessionState) -> SessionState:
         
         logger.info(f"💾 Persisting session {session_id}...")
         
-        # Add agent response to message history
+        # ====================================================================
+        # 1. ADD AGENT RESPONSE TO MESSAGE HISTORY
+        # ====================================================================
         if "messages" not in state:
             state["messages"] = []
         
@@ -296,7 +301,31 @@ async def end_session(state: SessionState) -> SessionState:
         })
         logger.info(f"📝 Agent response added to history (total: {len(state['messages'])})")
         
-        # Store to ChromaDB
+        # ====================================================================
+        # 2. STORE CONVERSATION TURNS TO SESSION_LOG (SQLite)
+        # ====================================================================
+        db = MemoryDatabase(db_path=SQLITE_PATH)
+        db.connect()
+        
+        try:
+            messages = state.get("messages", [])
+            
+            # Save session metadata
+            db.save_session(
+                session_id=session_id,
+                customer_id=customer_id,
+                turns=messages
+            )
+            logger.info(f"📋 Recorded {len(messages)} turns to session_log")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to save session turns: {e}")
+        finally:
+            db.close()
+        
+        # ====================================================================
+        # 3. STORE RESPONSE CHUNK TO ChromaDB
+        # ====================================================================
         vs = VectorStore(persist_path=CHROMA_PATH)
         vs.add_chunk(
             customer_id=customer_id,
@@ -304,8 +333,27 @@ async def end_session(state: SessionState) -> SessionState:
             text=agent_response[:500],
             topic_tag="response",
         )
+        logger.info("✅ Response stored to ChromaDB")
         
-        logger.info("✅ Session persisted")
+        # ====================================================================
+        # 4. CREATE SESSION SUMMARY (from message history)
+        # ====================================================================
+        if len(state.get("messages", [])) >= 2:
+            # Create summary from conversation
+            summary_text = f"Session {session_id}: {len(messages)} turns. "
+            summary_text += f"Final response: {agent_response[:200]}..."
+            
+            try:
+                vs.add_session_summary(
+                    customer_id=customer_id,
+                    session_id=session_id,
+                    summary_text=summary_text
+                )
+                logger.info("📄 Session summary stored")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to save session summary: {e}")
+        
+        logger.info("✅ Session persisted successfully")
         state["session_end_time"] = datetime.now().isoformat()
         
         return state
