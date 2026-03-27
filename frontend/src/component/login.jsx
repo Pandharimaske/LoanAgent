@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 
+const BASE_URL = import.meta.env.VITE_BASE_URL || "http://localhost:8000";
+
 const Login = () => {
   const navigate = useNavigate();
 
@@ -29,7 +31,7 @@ const Login = () => {
     try {
       setLoading(true);
       const response = await axios.post(
-        `${import.meta.env.VITE_BASE_URL}/auth/login`,
+        `${BASE_URL}/auth/login`,
         formData
       );
 

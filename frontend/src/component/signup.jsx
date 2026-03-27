@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Mail, Lock } from "lucide-react";
 
+const BASE_URL = import.meta.env.VITE_BASE_URL || "http://localhost:8000";
+
+
 const SignUp = () => {
   const navigate = useNavigate();
 
@@ -41,7 +44,7 @@ const SignUp = () => {
 
       // Use VITE_BASE_URL env var, correct backend endpoint is /auth/register
       const response = await axios.post(
-        `${import.meta.env.VITE_BASE_URL}/auth/register`,
+        `${BASE_URL}/auth/register`,
         { email, name, password }
       );
 
