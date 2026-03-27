@@ -29,14 +29,19 @@ const Login = () => {
     try {
       setLoading(true);
       const response = await axios.post(
-        "http://localhost:8000/api/auth/login",
+        "http://localhost:8000/auth/login",
         formData
       );
 
-      localStorage.setItem("userId", response.data.data?._id || "");
-      navigate("/dashboard");
+      if (response.data.success) {
+        localStorage.setItem("userId", response.data.user_id);
+        localStorage.setItem("sessionId", response.data.session_id);
+        navigate("/dashboard");
+      } else {
+        setError(response.data.message || "Login failed");
+      }
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed. Try again.");
+      setError(err.response?.data?.detail || err.response?.data?.message || "Login failed. Try again.");
     } finally {
       setLoading(false);
     }

@@ -10,6 +10,7 @@ from datetime import datetime
 
 from auth.models import UserLogin, UserResponse, UserSession
 from auth.user_store import UserDatabase
+from auth.utils import TokenManager
 from config import SQLITE_PATH
 
 # Create router
@@ -33,18 +34,15 @@ def get_db():
 
 class RegisterRequest(BaseModel):
     """User registration request."""
-    username: str
     email: EmailStr
     name: str
     password: str
-    customer_id: Optional[str] = None
 
 
 class RegisterResponse(BaseModel):
     """Registration response."""
     success: bool
     user_id: str
-    username: str
     email: str
     message: str
 
@@ -56,11 +54,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Login response with session token."""
+    """Login response with session token and JWT."""
     success: bool
     user_id: str
     email: str
     session_id: str
+    jwt_token: str
     expires_at: str
     customer_id: Optional[str] = None
     message: str
@@ -118,13 +117,15 @@ async def register(
         HTTPException 400: If validation fails or user exists
     """
     try:
+        # Generate username from email (part before @)
+        username = request.email.split("@")[0]
+        
         # Register user
         success, user_id, error = db.register_user(
-            username=request.username,
+            username=username,
             email=request.email,
             name=request.name,
             password=request.password,
-            customer_id=request.customer_id,
         )
 
         if not success:
@@ -136,9 +137,8 @@ async def register(
         return RegisterResponse(
             success=True,
             user_id=user_id,
-            username=request.username,
             email=request.email,
-            message=f"User {request.username} registered successfully",
+            message=f"User registered successfully",
         )
 
     except HTTPException:
@@ -181,11 +181,25 @@ async def login(
                 detail=error or "Login failed",
             )
 
+        # Generate JWT token
+        try:
+            jwt_token = TokenManager.create_jwt_token(
+                user_id=session.user_id,
+                email=session.email,
+                customer_id=session.customer_id,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Token generation error: {str(e)}",
+            )
+
         return LoginResponse(
             success=True,
             user_id=session.user_id,
             email=session.email,
             session_id=session.session_id,
+            jwt_token=jwt_token,
             expires_at=session.expires_at.isoformat(),
             customer_id=session.customer_id,
             message=f"Login successful. Session valid until {session.expires_at.isoformat()}",
