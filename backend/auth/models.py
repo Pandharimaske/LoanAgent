@@ -31,12 +31,8 @@ class UserCreate(UserBase):
     @field_validator('password')
     @classmethod
     def validate_password(cls, v):
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Password must contain uppercase letter")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Password must contain digit")
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
         return v
 
 

@@ -295,8 +295,15 @@ class UserDatabase:
 
         try:
             cursor = self.connection.cursor()
+            # JOIN with users to get email (user_sessions stores username, not email)
             cursor.execute(
-                "SELECT * FROM user_sessions WHERE session_id = ?", (session_id,)
+                """
+                SELECT s.*, u.email
+                FROM user_sessions s
+                JOIN users u ON s.user_id = u.user_id
+                WHERE s.session_id = ?
+                """,
+                (session_id,),
             )
             row = cursor.fetchone()
 
@@ -319,7 +326,7 @@ class UserDatabase:
             return UserSession(
                 session_id=session_data["session_id"],
                 user_id=session_data["user_id"],
-                username=session_data["username"],
+                email=session_data["email"],          # from JOIN with users table
                 customer_id=session_data["customer_id"],
                 logged_in_at=datetime.fromisoformat(
                     session_data["logged_in_at"]
