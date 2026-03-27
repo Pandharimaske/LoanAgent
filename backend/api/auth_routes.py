@@ -33,18 +33,15 @@ def get_db():
 
 class RegisterRequest(BaseModel):
     """User registration request."""
-    username: str
     email: EmailStr
     name: str
     password: str
-    customer_id: Optional[str] = None
 
 
 class RegisterResponse(BaseModel):
     """Registration response."""
     success: bool
     user_id: str
-    username: str
     email: str
     message: str
 
@@ -118,13 +115,15 @@ async def register(
         HTTPException 400: If validation fails or user exists
     """
     try:
+        # Generate username from email (part before @)
+        username = request.email.split("@")[0]
+        
         # Register user
         success, user_id, error = db.register_user(
-            username=request.username,
+            username=username,
             email=request.email,
             name=request.name,
             password=request.password,
-            customer_id=request.customer_id,
         )
 
         if not success:
@@ -136,9 +135,8 @@ async def register(
         return RegisterResponse(
             success=True,
             user_id=user_id,
-            username=request.username,
             email=request.email,
-            message=f"User {request.username} registered successfully",
+            message=f"User registered successfully",
         )
 
     except HTTPException:
