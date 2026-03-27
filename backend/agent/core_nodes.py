@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.state import SessionState
 from agent.prompts import ROUTER_PROMPT
 from agent.schemas import RouterDecision
-from agent.helpers import extract_conflicts_with_llm
+from agent.helpers import extract_conflicts_with_llm, format_conversation_history
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.models import MemoryStatus
@@ -80,6 +80,8 @@ async def load_memory(state: SessionState) -> SessionState:
     """
     Load customer memory from SQLite (Tier 1) + ChromaDB (Tier 2/3).
     
+    Also initializes conversation message history if not already done.
+    
     Tier 1: Confirmed facts (income, CIBIL, etc)
     Tier 2/3: Dynamic context + summaries
     """
@@ -88,6 +90,22 @@ async def load_memory(state: SessionState) -> SessionState:
         if not customer_id:
             state["error"] = "No customer_id"
             return state
+        
+        # ====================================================================
+        # INITIALIZE MESSAGE HISTORY
+        # ====================================================================
+        if "messages" not in state or not state.get("messages"):
+            state["messages"] = []
+        
+        # Add current user input to message history
+        user_input = state.get("user_input", "")
+        if user_input:
+            state["messages"].append({
+                "role": "user",
+                "content": user_input,
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info(f"📝 Message added to history (total: {len(state['messages'])})")
         
         # Load from SQLite
         db = MemoryDatabase(db_path=SQLITE_PATH)
@@ -174,6 +192,10 @@ async def router(state: SessionState) -> SessionState:
         context_summary = "\n".join(dynamic_context[:3]) if dynamic_context else "No relevant context found"
         facts_summary = json.dumps(confirmed_facts, indent=2) if confirmed_facts else "No confirmed facts"
         
+        # Format conversation history
+        messages = state.get("messages", [])
+        conversation_history = format_conversation_history(messages[:-1] if messages else [])  # Exclude current message
+        
         # ====================================================================
         # CONFIGURE LLM WITH STRUCTURED OUTPUT
         # ====================================================================
@@ -204,6 +226,7 @@ async def router(state: SessionState) -> SessionState:
                 "user_input": user_input,
                 "facts_summary": facts_summary,
                 "context_summary": context_summary,
+                "conversation_history": conversation_history,
             }
         )
         
@@ -259,6 +282,7 @@ async def router(state: SessionState) -> SessionState:
 async def end_session(state: SessionState) -> SessionState:
     """
     Persist all updates to SQLite and ChromaDB.
+    Also adds agent response to message history for future context.
     """
     try:
         customer_id = state.get("customer_id")
@@ -270,6 +294,17 @@ async def end_session(state: SessionState) -> SessionState:
             return state
         
         logger.info(f"💾 Persisting session {session_id}...")
+        
+        # Add agent response to message history
+        if "messages" not in state:
+            state["messages"] = []
+        
+        state["messages"].append({
+            "role": "assistant",
+            "content": agent_response,
+            "timestamp": datetime.now().isoformat()
+        })
+        logger.info(f"📝 Agent response added to history (total: {len(state['messages'])})")
         
         # Store to ChromaDB
         vs = VectorStore(persist_path=CHROMA_PATH)

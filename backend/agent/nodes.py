@@ -36,6 +36,7 @@ from agent.schemas import (
 from agent.helpers import (
     extract_conflicts_with_llm,
     classify_fields_with_llm,
+    format_conversation_history,
 )
 
 # ============================================================================
@@ -74,6 +75,7 @@ __all__ = [
     # Helpers
     "extract_conflicts_with_llm",
     "classify_fields_with_llm",
+    "format_conversation_history",
     # Core nodes
     "check_token_threshold",
     "load_memory",

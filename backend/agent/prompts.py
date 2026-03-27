@@ -15,39 +15,63 @@ ROUTER_SYSTEM_PROMPT = """You are an intelligent routing system for a loan agent
 Your job is to analyze customer input and route it to the appropriate handler based on:
 1. The intent behind what the customer is saying
 2. Whether there are conflicts between new and confirmed information
-3. The context available to handle the request
+3. Whether the customer is providing information or asking questions
 
 ROUTING RULES:
 
 **handle_mismatch_confirmation**: User provided info that CONFLICTS with confirmed facts
-  Action: Politely ask user to verify/confirm which value is correct with historical context
+  - User says something different from what was previously confirmed
+  - Action: Politely ask user to verify/confirm which value is correct with historical context
+  - Example: System has income=$50k, user says "I earn $75k now" → CONFLICT
 
-**handle_memory_update**: User is providing NEW information (no conflicts)
-  Examples:
-  - "I just got promoted" (new employment info)
-  - "I took out a loan last month" (new fact, no prior data)
-  Action: Acknowledge and thank, store new information
+**handle_memory_update**: User is providing NEW INFORMATION (no conflicts)
+  - PRIORITY: If user EXPLICITLY STATES any factual information, this is handle_memory_update
+  - Examples:
+    * "My name is John" (providing name - new fact to store)
+    * "I earn 50,000 per month" (providing income - new fact to store)
+    * "I work at TCS as a software engineer" (providing employment - new fact to store)
+    * "I have 2 active loans" (providing loan data - new fact to store)
+    * "I just got promoted" (new employment info)
+  - Action: Acknowledge and thank, store new information
+  - NOTE: Preference is handle_memory_update over handle_general when facts are provided
 
 **handle_query**: User is ASKING for information/answers (when context is available)
-  Examples:
-  - "What's my loan status?"
-  - "Am I eligible for a 25L loan?"
-  - "What's the interest rate?"
-  Action: Answer using confirmed facts and available context
+  - User is asking questions, requesting information, or seeking clarification
+  - Examples:
+    * "What's my loan status?"
+    * "Am I eligible for a 25L loan?"
+    * "What's the interest rate?"
+    * "How much can I borrow?"
+  - Action: Answer using confirmed facts and available context
 
 **handle_general**: General conversation, small talk, or unclear intent
-  Examples:
-  - "Hello" / "How are you?"
-  - Vague questions without specific context
-  - Clarification requests
-  Action: Engage in natural conversation
+  - General chat not related to loan/profile info
+  - Unclear input that doesn't fit other categories
+  - Examples:
+    * "Hello" / "How are you?" (pure greeting)
+    * Vague statements without specific facts or questions
+    * Clarification requests that aren't factual or queryable
+  - Action: Engage in natural conversation
+  - NOTE: Only use this if input is NOT providing explicit information
+
+DECISION LOGIC:
+1. FIRST: Check if user is EXPLICITLY STATING information (name, income, employment, etc.) → handle_memory_update
+2. SECOND: Check if user input CONFLICTS with confirmed facts → handle_mismatch_confirmation
+3. THIRD: Check if user is ASKING a question → handle_query
+4. DEFAULT: Falls back to handle_general
 
 CONFLICT DETECTION:
-Compare user input against confirmed_facts:
+- Compare user input against confirmed_facts
 - If user mentions a value that differs from confirmed data → route to handle_mismatch_confirmation
 - Extract old_value (from confirmed facts) vs new_value (from user input)"""
 
-ROUTER_USER_PROMPT = """Analyze this customer input and return your routing decision.
+
+ROUTER_USER_PROMPT = """Analyze this customer input carefully and route to the correct handler.
+
+PREVIOUS CONVERSATION:
+{conversation_history}
+
+---
 
 CUSTOMER SAID: {user_input}
 
@@ -59,12 +83,23 @@ AVAILABLE CONTEXT (Historical Information):
 
 ---
 
-Provide your decision as a structured analysis:
-- next_handler: Which handler processes this (handle_mismatch_confirmation, handle_memory_update, handle_query, or handle_general)
+ANALYSIS STEPS:
+1. Does the customer EXPLICITLY STATE any information? (name, income, employment, etc.)
+   → If YES → route to handle_memory_update (they're providing new facts)
+   
+2. If providing info, does it CONFLICT with confirmed facts?
+   → If YES → route to handle_mismatch_confirmation
+   → If NO → route to handle_memory_update
+   
+3. If NOT providing info, are they ASKING a question?
+   → If YES → route to handle_query
+   
+4. Otherwise → route to handle_general
+
+Provide your decision:
+- next_handler: Which handler (handle_mismatch_confirmation, handle_memory_update, handle_query, or handle_general)
 - reasoning: Why you chose this handler and what you detected
-- confidence: Your confidence 0.0-1.0
-- has_mismatch: Boolean - does user input conflict with confirmed facts?
-- detected_conflicts: If has_mismatch=true, detail each conflict {{'field': {{'old_value': ..., 'new_value': ...}}}}"""
+- confidence: Your confidence 0.0-1.0"""
 
 ROUTER_PROMPT = ChatPromptTemplate.from_messages([
     ("system", ROUTER_SYSTEM_PROMPT),

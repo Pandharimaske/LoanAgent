@@ -37,6 +37,11 @@ class SessionState(TypedDict, total=False):
     language: str  # 'en' or 'hi'
     
     # =============================
+    # CONVERSATION HISTORY (Message Buffer)
+    # =============================
+    messages: List[Dict[str, str]]  # Conversation history: [{"role": "user"|"assistant", "content": "..."}, ...]
+    
+    # =============================
     # MEMORY TIER 1 & 2 (loaded in load_memory node)
     # =============================
     confirmed_facts: Dict[str, Any]  # From SQLite (monthly_income, cibil_score, etc.)

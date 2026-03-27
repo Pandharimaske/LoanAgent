@@ -4,13 +4,14 @@ Helper functions for LLM-based analysis and classification.
 Functions:
 - extract_conflicts_with_llm: Detect conflicts between user input and confirmed facts
 - classify_fields_with_llm: Classify fields as schema or contextual information
+- format_conversation_history: Format message history for LLM context
 """
 
 import sys
 import logging
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -20,6 +21,32 @@ from agent.prompts import CONFLICT_EXTRACTION_PROMPT, FIELD_CLASSIFICATION_PROMP
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+
+def format_conversation_history(messages: List[Dict[str, str]], max_turns: int = 5) -> str:
+    """
+    Format message history into readable context for LLM.
+    
+    Args:
+        messages: List of message dicts with "role" and "content"
+        max_turns: Maximum number of recent turns to include
+    
+    Returns:
+        Formatted conversation history string
+    """
+    if not messages:
+        return "No previous conversation"
+    
+    # Get last N turns (each turn = user + assistant)
+    recent_messages = messages[-(max_turns * 2):]
+    
+    history_lines = []
+    for msg in recent_messages:
+        role = msg.get("role", "unknown").upper()
+        content = msg.get("content", "")
+        history_lines.append(f"{role}: {content}")
+    
+    return "\n".join(history_lines) if history_lines else "No previous conversation"
 
 
 async def extract_conflicts_with_llm(
