@@ -92,7 +92,19 @@ If you don't have enough information to answer, acknowledge and offer to help in
 
 QUERY_ANSWER_CHAT_PROMPT = ChatPromptTemplate.from_messages([
     ("system", "You are a helpful loan officer assistant. Answer customer questions accurately using provided facts and context."),
-    ("human", QUERY_ANSWER_PROMPT)
+    ("human", """You are a helpful loan officer assisting customers with their inquiries.
+
+CUSTOMER PROFILE:
+{facts_summary}
+
+RELEVANT CONTEXT:
+{context_summary}
+
+CUSTOMER'S QUESTION:
+{user_input}
+
+Provide a clear, accurate answer based on the customer profile and available context. 
+If you don't have enough information to answer, acknowledge and offer to help in another way.""")
 ])
 
 

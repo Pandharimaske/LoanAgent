@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -258,7 +258,7 @@ async def load_memory(state: SessionState) -> SessionState:
         
         if user_input:
             try:
-                results = vs.search(customer_id, user_input, top_k=VECTOR_SEARCH_TOP_K)
+                results = vs.search(customer_id, user_input, n_results=VECTOR_SEARCH_TOP_K)
                 dynamic_context = [doc.get("text", "") for doc in results if doc.get("text")]
                 state["dynamic_context"] = dynamic_context
                 logger.info(f"✅ Retrieved {len(dynamic_context)} chunks from ChromaDB")
