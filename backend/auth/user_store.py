@@ -31,7 +31,7 @@ class UserDatabase:
 
     def connect(self) -> sqlite3.Connection:
         """Connect to database."""
-        self.connection = sqlite3.connect(self.db_path)
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         return self.connection
