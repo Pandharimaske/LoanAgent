@@ -29,7 +29,15 @@ When storing information, use the exact field names shown below.
 
 📋 IDENTITY FIELDS:
   - full_name (string): Customer's complete full name
-  - date_of_birth (string): Date in ISO format (YYYY-MM-DD)
+  - date_of_birth (string): Date of birth — ALWAYS store in ISO format YYYY-MM-DD.
+    Normalize any format the user provides:
+      • "5-3-2005"   → "2005-03-05"
+      • "5/3/2005"   → "2005-03-05"  (treat as DD/MM/YYYY for Indian users)
+      • "March 5 2005" → "2005-03-05"
+      • "05.03.2005" → "2005-03-05"
+      • "2005-03-05" → "2005-03-05"  (already correct)
+    IMPORTANT: Identify this field from any of these user phrases:
+      "my DOB", "date of birth", "born on", "birthday", "I was born", "my birth date"
   - phone (string): Primary contact phone number
 
 🏠 ADDRESS FIELDS:
@@ -154,7 +162,7 @@ Provide a clear, accurate answer based on the customer profile and available con
 If you don't have enough information to answer, acknowledge and offer to help in another way.""")
 
 QUERY_ANSWER_CHAT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful loan officer assistant. Answer customer questions accurately using provided facts and context."),
+    ("system", "You are a helpful loan officer assistant. Answer customer questions accurately using provided facts and context.\nCRITICAL RULE: NEVER ask the user to provide information that is already present in the MEMORY CONTEXT. Do not force them to repeat details."),
     ("human", """You are a helpful loan officer assisting customers with their inquiries.
 
 MEMORY CONTEXT:
@@ -176,6 +184,7 @@ GENERAL_RESPONSE_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a friendly and professional loan officer.
 You help customers with their loan applications and inquiries.
 Use the customer's profile information to personalize your responses when relevant.
+CRITICAL RULE: NEVER ask the user for information that is already available in the MEMORY CONTEXT. Do not ask them to repeat their details.
 Be warm, helpful, and professional in every interaction."""),
     ("human", """MEMORY CONTEXT:
 {memory_context}
@@ -276,6 +285,7 @@ CLASSIFICATION RULES:
 1. For each piece of information the customer provides, identify the matching field from the schema
 2. Determine the appropriate value type (string, decimal, integer)
 3. Map to existing fields when possible, or flag as contextual if it doesn't fit the schema
+4. EXTRACT EXHAUSTIVELY: Ensure that every single piece of factual or contextual information provided in the input is perfectly extracted. Look carefully at the conversational history to resolve pronouns or short answers. Leave nothing behind, so the user never has to repeat their details!
 
 EXAMPLES OF FIELD MATCHING:
 - "I earn 50,000 per month" → monthly_income = 50000
@@ -283,6 +293,14 @@ EXAMPLES OF FIELD MATCHING:
 - "I want a home loan of 25 lakhs" → requested_loan_type = "home", requested_loan_amount = 2500000
 - "My name is Rajesh Kumar" → full_name = "Rajesh Kumar"
 - "I have 2 active loans with 15k EMI" → number_of_active_loans = 2, total_existing_emi_monthly = 15000
+
+DATE OF BIRTH EXAMPLES (field_name = "date_of_birth", field_type = "SCHEMA_FIELD"):
+- "DOB 5-3-2005"        → normalized_value = "2005-03-05"
+- "DOB 5/3/2005"        → normalized_value = "2005-03-05"  (DD/MM/YYYY for Indian users)
+- "born on March 5 2005" → normalized_value = "2005-03-05"
+- "my birthday is 05.03.2005" → normalized_value = "2005-03-05"
+- "date of birth: 1990-07-15" → normalized_value = "1990-07-15"
+CRITICAL: normalized_value for date_of_birth MUST always be YYYY-MM-DD string.
 """
 
 FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information against the database schema.
@@ -304,6 +322,7 @@ For each piece of information mentioned, provide:
 3. field_name: Schema field name (e.g. "full_name") or a short semantic description if contextual.
 4. normalized_value: Cleaned/validated value (for schema fields).
 5. category: General topic (e.g. personal, income).
+6. is_correction: Set to true ONLY if the user is explicitly correcting previous info, asking for an update, or confirming a new value when asked. Otherwise false.
 
 CRITICAL INSTRUCTION: If it matches a schema field (e.g. full_name, monthly_income), you MUST set field_type to "SCHEMA_FIELD"."""
 

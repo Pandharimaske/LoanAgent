@@ -48,6 +48,7 @@ class FieldClassification(BaseModel):
     field_name: str = Field(..., description="Schema field name if SCHEMA_FIELD, else semantic description")
     normalized_value: ScalarValue = Field(default=None, description="Normalized value for schema fields")
     category: str = Field(..., description="Category (income, employment, etc.)")
+    is_correction: bool = Field(default=False, description="True if user is explicitly updating, correcting, or confirming a new value")
 
 
 class FieldClassificationResult(BaseModel):

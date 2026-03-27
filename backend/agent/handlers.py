@@ -9,6 +9,7 @@ Handlers:
 """
 
 import sys
+import re
 import logging
 import json
 from pathlib import Path
@@ -33,6 +34,67 @@ from config import SQLITE_PATH, CHROMA_PATH
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# DATE NORMALIZATION
+# ============================================================================
+
+def _normalize_date(value: Any) -> Optional[str]:
+    """
+    Normalize any date-like input into ISO format YYYY-MM-DD.
+
+    Handles common user formats:
+      - DD-MM-YYYY  e.g. "5-3-2005"  or "05-03-2005"
+      - DD/MM/YYYY  e.g. "5/3/2005"  (default Indian convention — dayfirst)
+      - DD.MM.YYYY  e.g. "05.03.2005"
+      - YYYY-MM-DD  (already correct — pass-through)
+      - Month names e.g. "March 5 2005" / "5 March 2005" / "5th March, 2005"
+
+    Returns:
+        ISO date string "YYYY-MM-DD" on success, or None if unparseable.
+    """
+    if value is None:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    # 1. Already YYYY-MM-DD — validate calendar and return
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', raw):
+        try:
+            from datetime import date as _date
+            _date.fromisoformat(raw)
+            return raw
+        except ValueError:
+            pass  # fall through to other parsers
+
+    # 2. Try python-dateutil (handles month names, ordinals, etc.)
+    #    dayfirst=True  → treat "5/3/2005" as 5th March (Indian convention)
+    #    yearfirst=False → don't treat leading 4-digit as year when ambiguous
+    try:
+        from dateutil import parser as du_parser
+        parsed = du_parser.parse(raw, dayfirst=True, yearfirst=False)
+        return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # 3. Manual fallback for strict DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY
+    try:
+        parts = re.split(r'[-/.]', raw)
+        if len(parts) == 3:
+            d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+            from datetime import date as _date
+            return _date(y, m, d).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    logger.warning(f"⚠️  _normalize_date: could not parse '{raw}'")
+    return None
+
+
+# ============================================================================
+# PER-FIELD VALIDATION RULES
+# ============================================================================
 
 # Per-field type + range rules used for pre-storage validation
 _FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
@@ -57,13 +119,19 @@ _FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
     "coapplicant_name":            (str,    None),
     "coapplicant_relation":        (str,    None),
     "coapplicant_income":          (float,  None),
-    "date_of_birth":               (str,    None),
+    # date_of_birth handled specially — goes through _normalize_date
+    "date_of_birth":               (str,    "date"),
 }
 
 
 def _validate_field(field_name: str, value: Any) -> Tuple[bool, Any, Optional[str]]:
     """
     Validate and coerce a single field value.
+
+    Special handling:
+    - date_of_birth: normalized to YYYY-MM-DD via _normalize_date(), regardless
+      of how the LLM or user expressed it (DD-MM-YYYY, DD/MM/YYYY, month names …)
+
     Returns (is_valid, coerced_value, error_message).
     Unknown fields pass through (ChromaDB can store anything).
     """
@@ -75,7 +143,15 @@ def _validate_field(field_name: str, value: Any) -> Tuple[bool, Any, Optional[st
 
     expected_type, rule = _FIELD_RULES[field_name]
 
-    # Attempt type coercion
+    # ── Special case: date_of_birth ──────────────────────────────────────────
+    if field_name == "date_of_birth":
+        normalized = _normalize_date(value)
+        if normalized is None:
+            return False, value, f"date_of_birth: cannot parse '{value}' as a date"
+        logger.info(f"📅 date_of_birth normalized: '{value}' → '{normalized}'")
+        return True, normalized, None
+
+    # ── Generic coercion ─────────────────────────────────────────────────────
     try:
         coerced = expected_type(value)
     except (ValueError, TypeError):
@@ -93,21 +169,22 @@ def _validate_field(field_name: str, value: Any) -> Tuple[bool, Any, Optional[st
 
 
 # ============================================================================
-# HANDLER 1: HANDLE_MEMORY_UPDATE
+# EXTRACT MEMORY NODE (runs before router on every turn)
 # ============================================================================
 
 async def extract_memory_node(state: SessionState) -> SessionState:
     """
     UNIVERSAL EXTRACTION NODE:
     Runs on every turn before the router.
-    1. Extracts fields via LLM.
-    2. Programmatically checks for mismatches against existing facts.
-    3. Writes new/non-conflicting facts directly to SQLite/Chroma.
-    4. Regenerates the memory_prompt_block.
+    1. Extracts fields via LLM (classify_fields_with_llm).
+    2. Programmatically normalizes and validates each field (incl. date_of_birth).
+    3. Checks for mismatches against existing facts.
+    4. Writes new/non-conflicting facts directly to SQLite/Chroma.
+    5. Regenerates the memory_prompt_block.
     """
     try:
         from memory.retriever import MemoryRetriever
-        
+
         user_input  = (state.get("user_input") or "").strip()
         customer_id = (state.get("customer_id") or "").strip()
         session_id  = (state.get("session_id") or f"session_{datetime.now().timestamp()}").strip()
@@ -119,7 +196,7 @@ async def extract_memory_node(state: SessionState) -> SessionState:
         conv_history = format_conversation_history(messages[:-1]) if messages else "No prior conversation"
         memory_context = state.get("memory_prompt_block", "No context available")
 
-        # Step 1: Classify fields
+        # Step 1: Classify fields via LLM
         try:
             classifications: Dict[str, FieldClassification] = await classify_fields_with_llm(
                 user_input=user_input,
@@ -131,7 +208,6 @@ async def extract_memory_node(state: SessionState) -> SessionState:
             return state
 
         if not classifications:
-            # Maybe some contextual bits that didn't fit schema
             return state
 
         schema_fields: Dict[str, FieldClassification] = {}
@@ -143,12 +219,12 @@ async def extract_memory_node(state: SessionState) -> SessionState:
             else:
                 contextual_fields[name] = clf
 
-        # Step 2: Validate and check for Programmatic Mismatches
+        # Step 2: Validate / normalize + detect mismatches
         valid_schema: Dict[str, Any] = {}
         mismatches: Dict[str, Any] = {}
-        
-        # Flatten existing facts to easily compare
-        flat_facts = {}
+
+        # Flatten existing facts for comparison
+        flat_facts: Dict[str, Any] = {}
         for group, fields in state.get("customer_facts", {}).items():
             if isinstance(fields, dict):
                 flat_facts.update(fields)
@@ -158,31 +234,36 @@ async def extract_memory_node(state: SessionState) -> SessionState:
                 contextual_fields[field_name] = clf
                 continue
 
-            is_valid, coerced_val, _ = _validate_field(field_name, clf.normalized_value)
+            # _validate_field handles date_of_birth normalization internally
+            is_valid, coerced_val, err_msg = _validate_field(field_name, clf.normalized_value)
             if not is_valid:
+                logger.warning(f"⚠️  Skipping invalid field '{field_name}': {err_msg}")
                 continue
-                
+
             old_val = flat_facts.get(field_name)
-            
-            # Programmatic mismatch logic
-            if old_val is not None and str(old_val).strip() != str(coerced_val).strip():
-                # Conflict found!
+
+            # Mismatch check (normalize both sides for date fields before comparing)
+            old_str = str(old_val).strip() if old_val is not None else None
+            new_str = str(coerced_val).strip()
+
+            if old_str is not None and old_str != new_str and not getattr(clf, 'is_correction', False):
                 mismatches[field_name] = {
                     "old_value": old_val,
                     "new_value": coerced_val,
-                    "explanation": f"Detected new value '{coerced_val}' conflicting with existing record '{old_val}'.",
-                    "confidence": 0.95
+                    "explanation": (
+                        f"Detected new value '{coerced_val}' conflicting with "
+                        f"existing record '{old_val}'."
+                    ),
+                    "confidence": 0.95,
                 }
             else:
-                # Safe to insert/update
                 valid_schema[field_name] = coerced_val
 
-        # Store mismatches to state for the router to pick up
         if mismatches:
             state["memory_mismatches"] = mismatches
-            logger.info(f"⚠️ Programmatic conflict detection: {len(mismatches)} conflicts flagged.")
+            logger.info(f"⚠️  Programmatic conflict detection: {len(mismatches)} conflict(s) flagged.")
 
-        # Step 3+4: Write non-conflicting schema fields to SQLite
+        # Step 3: Write non-conflicting schema fields to SQLite
         wrote_schema = False
         if valid_schema:
             try:
@@ -190,11 +271,11 @@ async def extract_memory_node(state: SessionState) -> SessionState:
                     db.init_schema()
                     db.batch_update_fields(customer_id=customer_id, fields=valid_schema)
                 wrote_schema = True
-                logger.info(f"   💾 SQLite: Wrote {len(valid_schema)} fields natively")
+                logger.info(f"   💾 SQLite: Wrote {len(valid_schema)} field(s) → {list(valid_schema.keys())}")
             except Exception as e:
                 logger.error(f"❌ SQLite batch write failed: {e}")
 
-        # Step 5: Write contextual info to ChromaDB
+        # Step 4: Write contextual info to ChromaDB
         wrote_chroma = False
         if contextual_fields:
             try:
@@ -207,25 +288,26 @@ async def extract_memory_node(state: SessionState) -> SessionState:
                         text=chunk_text[:500],
                         topic_tag=clf.category or "general",
                         extra_metadata={
-                            "type": "memory_update", "source": "extract_memory_node"
+                            "type": "memory_update",
+                            "source": "extract_memory_node",
                         },
                     )
                 wrote_chroma = True
-                logger.info(f"   🔍 ChromaDB: {len(contextual_fields)} contextual chunks stored")
+                logger.info(f"   🔍 ChromaDB: {len(contextual_fields)} contextual chunk(s) stored")
             except Exception as e:
-                pass
+                logger.warning(f"⚠️  ChromaDB write failed: {e}")
 
-        # Step 6: Regenerate Context Block if data actually changed
+        # Step 5: Regenerate context block if anything changed
         if wrote_schema or wrote_chroma:
             try:
                 db = MemoryDatabase(db_path=SQLITE_PATH)
                 retriever = MemoryRetriever(db)
                 context_payload = retriever.build_context(
                     customer_id=customer_id,
-                    query=user_input,
-                    limit=3
+                    current_turn=user_input,
+                    n_chunks=3,
                 )
-                state["customer_facts"] = db.get_all_facts_grouped(customer_id)
+                state["customer_facts"]      = db.get_all_facts_grouped(customer_id)
                 state["memory_prompt_block"] = context_payload["prompt_block"]
                 db.close()
             except Exception as e:
@@ -236,6 +318,7 @@ async def extract_memory_node(state: SessionState) -> SessionState:
     except Exception as e:
         logger.error(f"❌ extract_memory_node logic crashed: {e}", exc_info=True)
         return state
+
 
 def _store_contextual_chunk(
     customer_id: str,
@@ -257,7 +340,7 @@ def _store_contextual_chunk(
 
 
 # ============================================================================
-# HANDLER 2: HANDLE_MISMATCH_CONFIRMATION
+# HANDLER: HANDLE_MISMATCH_CONFIRMATION
 # ============================================================================
 
 async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
@@ -275,14 +358,16 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
 
         if not mismatches:
             logger.warning("⚠️  mismatches is empty but handler was called!")
-            state["agent_response"] = "I thought there was a discrepancy with your data, but it seems fine. Moving on!"
+            state["agent_response"] = (
+                "I thought there was a discrepancy with your data, but it seems fine. Moving on!"
+            )
             return state
 
         # Build human-readable conflict details
         conflict_parts: List[str] = []
         for field, info in mismatches.items():
-            old_val    = info.get("old_value", "unknown")
-            new_val    = info.get("new_value", "unknown")
+            old_val     = info.get("old_value", "unknown")
+            new_val     = info.get("new_value", "unknown")
             explanation = info.get("explanation", "Value changed")
             confidence  = info.get("confidence", 0.0)
 
@@ -295,11 +380,10 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
 
         mismatch_details = "\n\n".join(conflict_parts)
 
-        # Historical context hint (extract rough date from ChromaDB text)
         historical_context = "a previous session"
         if dynamic_context:
             ctx_text = " ".join(dynamic_context[:2])
-            days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             if any(d in ctx_text for d in days) or "ago" in ctx_text:
                 historical_context = ctx_text[:200]
 
@@ -335,7 +419,7 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
 
 
 # ============================================================================
-# HANDLER 3: HANDLE_QUERY
+# HANDLER: HANDLE_QUERY
 # ============================================================================
 
 async def handle_query(state: SessionState) -> SessionState:
@@ -344,15 +428,15 @@ async def handle_query(state: SessionState) -> SessionState:
     Low temperature for factual accuracy.
     """
     try:
-        user_input       = state.get("user_input", "")
-        memory_context   = state.get("memory_prompt_block", "No context available")
+        user_input     = state.get("user_input", "")
+        memory_context = state.get("memory_prompt_block", "No context available")
 
         llm   = create_llm(temperature=0.2)
         chain = QUERY_ANSWER_CHAT_PROMPT | llm
 
         response = await chain.ainvoke({
-            "user_input":      user_input,
-            "memory_context":  memory_context,
+            "user_input":     user_input,
+            "memory_context": memory_context,
         })
 
         answer = response.content if hasattr(response, "content") else str(response)
@@ -371,7 +455,7 @@ async def handle_query(state: SessionState) -> SessionState:
 
 
 # ============================================================================
-# HANDLER 4: HANDLE_GENERAL
+# HANDLER: HANDLE_GENERAL
 # ============================================================================
 
 async def handle_general(state: SessionState) -> SessionState:
@@ -380,15 +464,15 @@ async def handle_general(state: SessionState) -> SessionState:
     Slightly higher temperature for a conversational feel.
     """
     try:
-        user_input      = state.get("user_input", "")
-        memory_context  = state.get("memory_prompt_block", "No context available")
+        user_input     = state.get("user_input", "")
+        memory_context = state.get("memory_prompt_block", "No context available")
 
         llm   = create_llm(temperature=0.7)
         chain = GENERAL_RESPONSE_PROMPT | llm
 
         response = await chain.ainvoke({
-            "user_input":      user_input,
-            "memory_context":  memory_context,
+            "user_input":     user_input,
+            "memory_context": memory_context,
         })
 
         answer = response.content if hasattr(response, "content") else str(response)
