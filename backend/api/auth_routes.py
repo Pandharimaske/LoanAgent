@@ -51,7 +51,7 @@ class RegisterResponse(BaseModel):
 
 class LoginRequest(BaseModel):
     """User login request."""
-    username: str
+    email: EmailStr
     password: str
 
 
@@ -59,7 +59,7 @@ class LoginResponse(BaseModel):
     """Login response with session token."""
     success: bool
     user_id: str
-    username: str
+    email: str
     session_id: str
     expires_at: str
     customer_id: Optional[str] = None
@@ -81,7 +81,7 @@ class SessionCheckResponse(BaseModel):
     """Session status response."""
     session_id: str
     user_id: str
-    username: str
+    email: str
     customer_id: Optional[str] = None
     is_active: bool
     expires_at: str
@@ -171,7 +171,7 @@ async def login(
     try:
         # Attempt login
         success, session, error = db.login(
-            username=request.username,
+            email=request.email,
             password=request.password,
         )
 
@@ -184,7 +184,7 @@ async def login(
         return LoginResponse(
             success=True,
             user_id=session.user_id,
-            username=session.username,
+            email=session.email,
             session_id=session.session_id,
             expires_at=session.expires_at.isoformat(),
             customer_id=session.customer_id,
@@ -268,7 +268,7 @@ async def check_session(
         return SessionCheckResponse(
             session_id=session.session_id,
             user_id=session.user_id,
-            username=session.username,
+            email=session.email,
             customer_id=session.customer_id,
             is_active=session.is_active,
             expires_at=session.expires_at.isoformat(),

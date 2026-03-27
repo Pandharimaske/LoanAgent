@@ -77,7 +77,7 @@ class User(UserBase):
 
 class UserLogin(BaseModel):
     """User login request."""
-    username: str
+    email: EmailStr
     password: str
 
 
@@ -99,7 +99,7 @@ class UserSession(BaseModel):
     """User session tracking."""
     session_id: str
     user_id: str
-    username: str
+    email: str
     customer_id: Optional[str] = None
     logged_in_at: datetime
     last_activity: datetime
@@ -113,7 +113,7 @@ class UserSession(BaseModel):
 class TokenData(BaseModel):
     """JWT token data."""
     user_id: str
-    username: str
+    email: str
     customer_id: Optional[str] = None
     role: UserRole
     issued_at: datetime

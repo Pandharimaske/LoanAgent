@@ -163,13 +163,13 @@ class UserDatabase:
             return False, None, str(e)
 
     def login(
-        self, username: str, password: str, expires_in_hours: int = 24
+        self, email: str, password: str, expires_in_hours: int = 24
     ) -> Tuple[bool, Optional[UserSession], Optional[str]]:
         """
         Authenticate user and create session.
         
         Args:
-            username: Username
+            email: Email address
             password: Plain text password
             expires_in_hours: Session expiry time
             
@@ -182,18 +182,18 @@ class UserDatabase:
         try:
             cursor = self.connection.cursor()
 
-            # Fetch user by username
-            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            # Fetch user by email
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
             row = cursor.fetchone()
 
             if not row:
-                return False, None, "Invalid username or password"
+                return False, None, "Invalid email or password"
 
             user = dict(row)
 
             # Verify password
             if not PasswordManager.verify_password(password, user["password_hash"]):
-                return False, None, "Invalid username or password"
+                return False, None, "Invalid email or password"
 
             # Check if user is active
             if user["status"] != UserStatus.ACTIVE.value:
@@ -235,7 +235,7 @@ class UserDatabase:
             session = UserSession(
                 session_id=session_id,
                 user_id=user["user_id"],
-                username=user["username"],
+                email=user["email"],
                 customer_id=user["customer_id"],
                 logged_in_at=now,
                 last_activity=now,
