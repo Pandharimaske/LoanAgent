@@ -6,8 +6,14 @@ Handles connection, retries, and error handling.
 import httpx
 import json
 import asyncio
+import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_MAX_RETRIES, OLLAMA_TIMEOUT
 
 RETRY_DELAY = 2  # seconds
