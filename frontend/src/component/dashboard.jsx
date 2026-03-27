@@ -20,20 +20,34 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const fetchUserData = async () => {
+      const sessionId = localStorage.getItem("sessionId");
       const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/loan-login");
+      if (!sessionId || !token) {
+        navigate("/login");
         return;
       }
       try {
-        const response = await axios.get(`${import.meta.env.VITE_BASE_URL}/loan/profile`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setUserData(response.data.user || response.data);
+        const response = await axios.get(
+          `http://localhost:8000/auth/session/${sessionId}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (response.data.is_active) {
+          setUserData({
+            email: response.data.email,
+            user_id: response.data.user_id,
+            customer_id: response.data.customer_id || "Not assigned",
+            session_id: response.data.session_id,
+            session_expires: response.data.expires_at,
+          });
+        } else {
+          throw new Error("Session expired");
+        }
       } catch (err) {
-        console.error("Invalid token or failed to fetch user data", err);
+        console.error("Session validation failed", err);
         localStorage.removeItem("token");
-        navigate("/loan-login");
+        localStorage.removeItem("sessionId");
+        localStorage.removeItem("userId");
+        navigate("/login");
       } finally {
         setLoading(false);
       }
@@ -48,13 +62,39 @@ export default function DashboardPage() {
 
   const handleLogout = () => {
     localStorage.removeItem("token");
-    navigate("/loan-login");
+    localStorage.removeItem("sessionId");
+    localStorage.removeItem("userId");
+    navigate("/login");
   };
 
-  const handleSend = () => {
-    if (input.trim()) {
-      setChat([...chat, { id: chat.length + 1, role: "user", text: input }]);
-      setInput("");
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!input.trim() || sending) return;
+
+    const userText = input.trim();
+    setInput("");
+    setChat((prev) => [...prev, { id: prev.length + 1, role: "user", text: userText }]);
+    setSending(true);
+
+    try {
+      const sessionId = localStorage.getItem("sessionId");
+      const response = await axios.post("http://localhost:8000/session/message", {
+        session_id: sessionId || "demo_session",
+        user_input: userText,
+        language: "en",
+      });
+
+      const agentText = response.data.agent_response || "(no response)";
+      setChat((prev) => [...prev, { id: prev.length + 1, role: "agent", text: agentText }]);
+    } catch (err) {
+      console.error("Message send failed", err);
+      setChat((prev) => [
+        ...prev,
+        { id: prev.length + 1, role: "agent", text: "⚠️ Agent unavailable. Please try again." },
+      ]);
+    } finally {
+      setSending(false);
     }
   };
 
@@ -116,18 +156,20 @@ export default function DashboardPage() {
           <div className="sticky bottom-0 bg-white/95 border-t border-slate-200 px-3 md:px-8 py-3 md:py-4 flex items-center gap-2 md:gap-3 z-10">
             <input
               type="text"
-              className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 text-slate-900 shadow-sm placeholder-slate-400 text-base md:text-lg"
-              placeholder="Type your message..."
+              className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 text-slate-900 shadow-sm placeholder-slate-400 text-base md:text-lg disabled:opacity-60"
+              placeholder={sending ? "Agent is thinking..." : "Type your message..."}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleSend()}
+              disabled={sending}
             />
             <button
               onClick={handleSend}
-              className="p-2 md:p-3 bg-gradient-to-br from-blue-600 to-blue-500 text-white rounded-full hover:from-blue-700 hover:to-blue-600 transition shadow-md focus:outline-none focus:ring-2 focus:ring-blue-400"
+              disabled={sending}
+              className="p-2 md:p-3 bg-gradient-to-br from-blue-600 to-blue-500 text-white rounded-full hover:from-blue-700 hover:to-blue-600 transition shadow-md focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-60 disabled:cursor-not-allowed"
               aria-label="Send"
             >
-              <Send className="w-5 h-5 md:w-6 md:h-6" />
+              {sending ? <Loader2 className="w-5 h-5 md:w-6 md:h-6 animate-spin" /> : <Send className="w-5 h-5 md:w-6 md:h-6" />}
             </button>
           </div>
         </section>

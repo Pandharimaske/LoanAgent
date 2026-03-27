@@ -36,6 +36,7 @@ const Login = () => {
       if (response.data.success) {
         localStorage.setItem("userId", response.data.user_id);
         localStorage.setItem("sessionId", response.data.session_id);
+        localStorage.setItem("token", response.data.jwt_token);  // Dashboard reads 'token'
         navigate("/dashboard");
       } else {
         setError(response.data.message || "Login failed");
