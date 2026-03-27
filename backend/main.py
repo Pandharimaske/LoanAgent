@@ -16,6 +16,8 @@ from config import DEBUG, LOG_LEVEL
 from api.auth_routes import router as auth_router
 from api.session_routes import router as session_router
 from auth.user_store import UserDatabase
+from memory.sqlite_store import MemoryDatabase
+from memory.vector_store import VectorStore
 
 # Create FastAPI app
 app = FastAPI(
@@ -127,13 +129,30 @@ async def startup():
     
     # Initialize user database schema
     try:
-        db = UserDatabase()
-        db.connect()
-        db.init_user_schema()
-        db.close()
+        user_db = UserDatabase()
+        user_db.connect()
+        user_db.init_user_schema()
+        user_db.close()
         print("✅ User database schema initialized")
     except Exception as e:
         print(f"❌ Error initializing user database: {e}")
+    
+    # Initialize memory database schema
+    try:
+        memory_db = MemoryDatabase()
+        memory_db.connect()
+        memory_db.init_schema()
+        memory_db.close()
+        print("✅ Memory database schema initialized")
+    except Exception as e:
+        print(f"❌ Error initializing memory database: {e}")
+    
+    # Initialize vector store (ChromaDB)
+    try:
+        vector_store = VectorStore()
+        print("✅ Vector store (ChromaDB) initialized")
+    except Exception as e:
+        print(f"❌ Error initializing vector store: {e}")
     
     print("=" * 70 + "\n")
 
