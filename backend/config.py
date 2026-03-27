@@ -48,6 +48,12 @@ Path(SQLITE_PATH).parent.mkdir(parents=True, exist_ok=True)
 Path(CHROMA_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
+# ENCRYPTION
+# ============================================================================
+
+DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "")
+
+# ============================================================================
 # MEMORY THRESHOLDS & LIMITS
 # ============================================================================
 
@@ -112,6 +118,10 @@ def print_config():
     print("\n⚙️  Other:")
     print(f"   DEBUG:    {DEBUG}")
     print(f"   LOG_LEVEL: {LOG_LEVEL}")
+    
+    print("\n🔐 Encryption:")
+    key_status = "SET" if DB_ENCRYPTION_KEY else "NOT SET (using random)"
+    print(f"   DB_ENCRYPTION_KEY: {key_status}")
     
     print("\n" + "=" * 70 + "\n")
 
