@@ -169,7 +169,7 @@ Return JSON:
 }}"""
         
         client = OllamaClient()
-        response = await client.generate(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt)
         
         try:
             result = json.loads(response)
@@ -283,7 +283,7 @@ QUESTION: {user_input}
 Answer:"""
         
         client = OllamaClient()
-        response = await client.generate(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt)
         
         state["query_response"] = response
         state["agent_response"] = response
@@ -320,7 +320,7 @@ USER: {user_input}
 Response:"""
         
         client = OllamaClient()
-        response = await client.generate(prompt, model=OLLAMA_MODEL)
+        response = await client.generate(prompt)
         
         state["agent_response"] = response
         logger.info("💬 Response sent")
@@ -356,11 +356,9 @@ async def end_session(state: SessionState) -> SessionState:
         vs = VectorStore(persist_path=CHROMA_PATH)
         vs.add_chunk(
             customer_id=customer_id,
+            session_id=session_id,
             text=agent_response[:500],
-            metadata={
-                "session_id": session_id,
-                "timestamp": datetime.now().isoformat()
-            },
+            topic_tag="response",
         )
         
         logger.info(f"✅ Session persisted")
