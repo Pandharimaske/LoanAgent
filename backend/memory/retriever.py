@@ -19,186 +19,15 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.sqlite_store import MemoryDatabase
+from memory.sqlite_store_simplified import MemoryDatabase
 from memory.vector_store import VectorStore
-from memory.models import (
-    CustomerMemoryNonPII,
-    CustomerMemoryPII,
-    FixedEntity,
-    MemoryStatus,
-    ApplicationStatus,
-)
+from memory.models import CustomerMemory
 from config import VECTOR_SEARCH_TOP_K
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# FACT FORMATTER — Turns SQLite models into human-readable strings
-# ============================================================================
 
-
-def _fmt_entity(entity: Optional[FixedEntity], label: str, unit: str = "") -> Optional[str]:
-    """
-    Format a single FixedEntity into a readable fact line.
-    Only returns a value if status is CONFIRMED or PENDING.
-    Skips RETRACTED and SUPERSEDED.
-
-    Example:
-        "Monthly Income: ₹45,000 [CONFIRMED, Session S1]"
-        "CIBIL Score: 750 [PENDING]"
-    """
-    if entity is None or entity.current is None:
-        return None
-
-    rec = entity.current
-    if rec.status in (MemoryStatus.RETRACTED, MemoryStatus.SUPERSEDED):
-        return None
-
-    value = rec.value
-    if unit:
-        formatted_value = f"{unit}{value}"
-    else:
-        formatted_value = str(value)
-
-    status_tag = f"[{rec.status.value.upper()}, Session {rec.session_id}]"
-    return f"{label}: {formatted_value} {status_tag}"
-
-
-def _fmt_currency(entity: Optional[FixedEntity], label: str) -> Optional[str]:
-    """Format a currency FixedEntity with rupee symbol."""
-    return _fmt_entity(entity, label, unit="₹")
-
-
-def build_nonpii_facts(nonpii: CustomerMemoryNonPII) -> str:
-    """
-    Build the structured fact block from Non-PII SQLite data.
-    Only includes fields that have a current value (CONFIRMED or PENDING).
-    """
-    lines = []
-
-    # Income & Employment
-    income_line = _fmt_currency(nonpii.monthly_income, "Monthly Income")
-    if income_line:
-        lines.append(income_line)
-
-    income_type = _fmt_entity(nonpii.income_type, "Income Type")
-    if income_type:
-        lines.append(income_type)
-
-    exp = _fmt_entity(nonpii.total_work_experience_years, "Work Experience")
-    if exp:
-        lines.append(exp + " years")
-
-    # Credit
-    cibil = _fmt_entity(nonpii.cibil_score, "CIBIL Score")
-    if cibil:
-        lines.append(cibil)
-
-    emi = _fmt_currency(nonpii.total_existing_emi_monthly, "Existing EMI (monthly)")
-    if emi:
-        lines.append(emi)
-
-    loans = _fmt_entity(nonpii.number_of_active_loans, "Active Loans")
-    if loans:
-        lines.append(loans)
-
-    # Loan Request
-    if nonpii.loan_request:
-        lr = nonpii.loan_request
-        loan_type = _fmt_entity(lr.loan_type, "Loan Type")
-        if loan_type:
-            lines.append(loan_type)
-
-        loan_amt = _fmt_currency(lr.loan_amount, "Loan Amount Requested")
-        if loan_amt:
-            lines.append(loan_amt)
-
-        tenure = _fmt_entity(lr.tenure_months, "Tenure")
-        if tenure:
-            lines.append(tenure + " months")
-
-        purpose = _fmt_entity(lr.purpose, "Loan Purpose")
-        if purpose:
-            lines.append(purpose)
-
-    # Documents
-    if nonpii.documents_submitted:
-        doc_names = [d.doc_type for d in nonpii.documents_submitted]
-        lines.append(f"Documents Submitted: {', '.join(doc_names)}")
-
-    # Application status
-    if nonpii.application_status != ApplicationStatus.INCOMPLETE:
-        lines.append(f"Application Status: {nonpii.application_status.value.upper()}")
-
-    if not lines:
-        return "No factual data recorded yet."
-
-    return "\n".join(f"  • {line}" for line in lines)
-
-
-def build_pii_facts(pii: CustomerMemoryPII) -> str:
-    """
-    Build the PII fact block from encrypted SQLite data.
-    Includes name, contact, co-applicants, guarantors.
-    """
-    lines = []
-
-    # Identity
-    name = _fmt_entity(pii.full_name, "Customer Name")
-    if name:
-        lines.append(name)
-
-    phone = _fmt_entity(pii.primary_phone, "Phone")
-    if phone:
-        lines.append(phone)
-
-    city = _fmt_entity(pii.city, "City")
-    if city:
-        lines.append(city)
-
-    state = _fmt_entity(pii.state, "State")
-    if state:
-        lines.append(state)
-
-    # Employment
-    employer = _fmt_entity(pii.employer_name, "Employer")
-    if employer:
-        lines.append(employer)
-
-    years_job = _fmt_entity(pii.years_at_current_job, "Years at Current Job")
-    if years_job:
-        lines.append(years_job)
-
-    # Co-applicants
-    for i, co in enumerate(pii.co_applicants, 1):
-        co_parts = []
-        if co.name and co.name.current:
-            co_parts.append(co.name.current.value)
-        if co.relation and co.relation.current:
-            co_parts.append(f"({co.relation.current.value})")
-        if co.income_monthly and co.income_monthly.current:
-            co_parts.append(f"income ₹{co.income_monthly.current.value}")
-        if co_parts:
-            status_tag = ""
-            if co.name and co.name.current:
-                status_tag = f" [{co.name.current.status.value.upper()}]"
-            lines.append(f"Co-applicant {i}: {' '.join(co_parts)}{status_tag}")
-
-    # Guarantors
-    for i, g in enumerate(pii.guarantors, 1):
-        g_parts = []
-        if g.name and g.name.current:
-            g_parts.append(g.name.current.value)
-        if g.relation and g.relation.current:
-            g_parts.append(f"({g.relation.current.value})")
-        if g_parts:
-            lines.append(f"Guarantor {i}: {' '.join(g_parts)}")
-
-    if not lines:
-        return "No personal information recorded yet."
-
-    return "\n".join(f"  • {line}" for line in lines)
 
 
 # ============================================================================
@@ -240,7 +69,6 @@ class MemoryRetriever:
         current_turn: str,
         n_chunks: int = VECTOR_SEARCH_TOP_K,
         n_summaries: int = 2,
-        include_pii: bool = True,
     ) -> Dict[str, Any]:
         """
         Build the full memory context for the current agent turn.
@@ -267,15 +95,59 @@ class MemoryRetriever:
 
         # ---- Tier 1: SQLite Structured Facts ----
         try:
-            nonpii, pii = self.db.load_customer_memory(customer_id)
-            if nonpii:
+            memory = self.db.load_customer_memory(customer_id)
+            if memory:
                 customer_found = True
-                fact_lines = build_nonpii_facts(nonpii)
-                if pii and include_pii:
-                    pii_lines = build_pii_facts(pii)
-                    structured_facts = f"{pii_lines}\n{fact_lines}"
-                else:
-                    structured_facts = fact_lines
+                # Build facts from the flat schema
+                lines = []
+                # Identity
+                if memory.full_name and memory.full_name_status:
+                    lines.append(f"  • Full Name: {memory.full_name} [{memory.full_name_status.upper()}]")
+                if memory.email and memory.email_status:
+                    lines.append(f"  • Email: {memory.email} [{memory.email_status.upper()}]")
+                if memory.phone and memory.phone_status:
+                    lines.append(f"  • Phone: {memory.phone} [{memory.phone_status.upper()}]")
+                # Address
+                if memory.city and memory.city_status:
+                    lines.append(f"  • City: {memory.city} [{memory.city_status.upper()}]")
+                if memory.state and memory.state_status:
+                    lines.append(f"  • State: {memory.state} [{memory.state_status.upper()}]")
+                # Employment
+                if memory.employer_name and memory.employer_name_status:
+                    lines.append(f"  • Employer: {memory.employer_name} [{memory.employer_name_status.upper()}]")
+                if memory.job_title and memory.job_title_status:
+                    lines.append(f"  • Job Title: {memory.job_title} [{memory.job_title_status.upper()}]")
+                if memory.total_work_experience_years and memory.total_work_experience_years_status:
+                    lines.append(f"  • Work Experience: {memory.total_work_experience_years} years [{memory.total_work_experience_years_status.upper()}]")
+                # Income
+                if memory.monthly_income and memory.monthly_income_status:
+                    lines.append(f"  • Monthly Income: ₹{memory.monthly_income} [{memory.monthly_income_status.upper()}]")
+                if memory.annual_income and memory.annual_income_status:
+                    lines.append(f"  • Annual Income: ₹{memory.annual_income} [{memory.annual_income_status.upper()}]")
+                # Credit
+                if memory.cibil_score and memory.cibil_score_status:
+                    lines.append(f"  • CIBIL Score: {memory.cibil_score} [{memory.cibil_score_status.upper()}]")
+                if memory.total_existing_emi_monthly and memory.total_existing_emi_monthly_status:
+                    lines.append(f"  • Existing EMI (monthly): ₹{memory.total_existing_emi_monthly} [{memory.total_existing_emi_monthly_status.upper()}]")
+                if memory.number_of_active_loans and memory.number_of_active_loans_status:
+                    lines.append(f"  • Active Loans: {memory.number_of_active_loans} [{memory.number_of_active_loans_status.upper()}]")
+                # Loan Request
+                if memory.requested_loan_amount and memory.requested_loan_amount_status:
+                    lines.append(f"  • Loan Amount Requested: ₹{memory.requested_loan_amount} [{memory.requested_loan_amount_status.upper()}]")
+                if memory.requested_loan_type and memory.requested_loan_type_status:
+                    lines.append(f"  • Loan Type: {memory.requested_loan_type} [{memory.requested_loan_type_status.upper()}]")
+                if memory.requested_tenure_months and memory.requested_tenure_months_status:
+                    lines.append(f"  • Tenure: {memory.requested_tenure_months} months [{memory.requested_tenure_months_status.upper()}]")
+                # Co-applicant
+                if memory.co_applicant_name and memory.co_applicant_name_status:
+                    lines.append(f"  • Co-applicant: {memory.co_applicant_name} [{memory.co_applicant_name_status.upper()}]")
+                if memory.co_applicant_monthly_income and memory.co_applicant_monthly_income_status:
+                    lines.append(f"  • Co-applicant Income: ₹{memory.co_applicant_monthly_income} [{memory.co_applicant_monthly_income_status.upper()}]")
+                # Application
+                if memory.application_status:
+                    lines.append(f"  • Application Status: {memory.application_status.upper()}")
+                
+                structured_facts = "\n".join(lines) if lines else "No factual data recorded yet."
             else:
                 structured_facts = "New customer — no structured data yet."
         except Exception as e:
@@ -374,35 +246,28 @@ class MemoryRetriever:
             A concise string listing all confirmed facts, or empty string.
         """
         try:
-            nonpii, pii = self.db.load_customer_memory(customer_id)
-            if not nonpii:
+            memory = self.db.load_customer_memory(customer_id)
+            if not memory:
                 return ""
 
             confirmed = []
 
-            def _check(entity: Optional[FixedEntity], label: str, unit: str = ""):
-                if entity and entity.current:
-                    if entity.current.status == MemoryStatus.CONFIRMED:
-                        val = f"{unit}{entity.current.value}"
-                        confirmed.append(f"{label}={val}")
+            # Helper to add confirmed fields
+            def _add_if_confirmed(value, label: str, unit: str = "", status: str = "pending"):
+                if value and status == "confirmed":
+                    val = f"{unit}{value}" if unit else str(value)
+                    confirmed.append(f"{label}={val}")
 
-            _check(nonpii.monthly_income, "income", "₹")
-            _check(nonpii.income_type, "income_type")
-            _check(nonpii.cibil_score, "cibil")
-            _check(nonpii.total_existing_emi_monthly, "emi", "₹")
-
-            if nonpii.loan_request:
-                _check(nonpii.loan_request.loan_amount, "loan_amount", "₹")
-                _check(nonpii.loan_request.loan_type, "loan_type")
-
-            if pii:
-                _check(pii.full_name, "name")
-                _check(pii.city, "city")
-                _check(pii.employer_name, "employer")
-                for i, co in enumerate(pii.co_applicants, 1):
-                    if co.name and co.name.current:
-                        if co.name.current.status == MemoryStatus.CONFIRMED:
-                            confirmed.append(f"co_applicant_{i}={co.name.current.value}")
+            _add_if_confirmed(memory.monthly_income, "income", "₹", memory.monthly_income_status)
+            _add_if_confirmed(memory.annual_income, "annual_income", "₹", memory.annual_income_status)
+            _add_if_confirmed(memory.cibil_score, "cibil", "", memory.cibil_score_status)
+            _add_if_confirmed(memory.total_existing_emi_monthly, "emi", "₹", memory.total_existing_emi_monthly_status)
+            _add_if_confirmed(memory.requested_loan_amount, "loan_amount", "₹", memory.requested_loan_amount_status)
+            _add_if_confirmed(memory.requested_loan_type, "loan_type", "", memory.requested_loan_type_status)
+            _add_if_confirmed(memory.full_name, "name", "", memory.full_name_status)
+            _add_if_confirmed(memory.city, "city", "", memory.city_status)
+            _add_if_confirmed(memory.employer_name, "employer", "", memory.employer_name_status)
+            _add_if_confirmed(memory.co_applicant_name, "co_applicant", "", memory.co_applicant_name_status)
 
             return " | ".join(confirmed) if confirmed else ""
 
@@ -420,88 +285,3 @@ class MemoryRetriever:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-
-# ============================================================================
-# QUICK TEST
-# ============================================================================
-
-if __name__ == "__main__":
-    import tempfile, os
-
-    print("=" * 65)
-    print("MemoryRetriever Test")
-    print("=" * 65)
-
-    # Set up temp stores
-    tmp = tempfile.mkdtemp()
-    db_path = os.path.join(tmp, "test_memory.db")
-    chroma_path = os.path.join(tmp, "chroma")
-
-    db = MemoryDatabase(db_path=db_path)
-    db.connect()
-    db.init_schema()
-
-    vector = VectorStore(persist_path=chroma_path)
-
-    # Seed SQLite with Rajesh's data
-    from memory.models import create_test_memory, SessionLog
-    nonpii, pii = create_test_memory()
-    db.save_customer_memory(nonpii, pii)
-
-    # Seed a session
-    session = SessionLog(
-        session_id="S1",
-        customer_id="RAJESH_001",
-        started_at=datetime.now(),
-        agent_id="AGENT_A",
-    )
-    db.save_session(session)
-    db.end_session("S1", summary="Rajesh needs home loan. Income 45000. Wife Sunita co-applicant.")
-
-    # Seed ChromaDB
-    vector.add_session_summary(
-        customer_id="RAJESH_001",
-        session_id="S1",
-        summary_text="Rajesh applied for home loan. Monthly income 45000. Wife Sunita as co-applicant.",
-        session_date="Monday Jan 15",
-        agent_id="AGENT_A",
-    )
-    vector.add_chunk(
-        customer_id="RAJESH_001",
-        session_id="S1",
-        text="Rajesh mentioned income is 45000 per month",
-        topic_tag="income",
-        turn_index=1,
-    )
-    vector.add_chunk(
-        customer_id="RAJESH_001",
-        session_id="S1",
-        text="Wife Sunita Kumar will be co-applicant for the home loan",
-        topic_tag="co_applicant",
-        turn_index=2,
-    )
-
-    # Build context
-    retriever = MemoryRetriever(db=db, vector_store=vector)
-
-    print("\n--- build_context() for turn: 'what is my income?' ---\n")
-    result = retriever.build_context(
-        customer_id="RAJESH_001",
-        current_turn="what is my income?",
-    )
-    print(result["prompt_block"])
-
-    print("\n--- Confirmed facts summary ---")
-    print(retriever.get_confirmed_facts_summary("RAJESH_001"))
-
-    print("\n--- Non-existent customer ---")
-    result2 = retriever.build_context(
-        customer_id="UNKNOWN_999",
-        current_turn="hello",
-    )
-    print(f"customer_found: {result2['customer_found']}")
-    print(result2["prompt_block"][:200])
-
-    db.close()
-    print("\n[ALL TESTS PASSED]")
-    print("=" * 65)

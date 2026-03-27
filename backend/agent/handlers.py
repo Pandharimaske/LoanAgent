@@ -2,10 +2,10 @@
 Handler nodes for different types of customer interactions.
 
 Handlers:
-- handle_memory_update: Store new customer information (schema + contextual)
-- handle_mismatch_confirmation: Ask user to verify conflicting data
-- handle_query: Answer customer questions about their loan/profile
-- handle_general: General conversation with context injection
+- handle_memory_update  : Classify user input → SQLite (schema fields) or ChromaDB (contextual)
+- handle_mismatch_confirmation : Ask user to verify conflicting data
+- handle_query          : Answer questions using facts + context
+- handle_general        : General conversation with context injection
 """
 
 import sys
@@ -13,6 +13,7 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -23,14 +24,72 @@ from agent.prompts import (
     GENERAL_RESPONSE_PROMPT,
     MISMATCH_VERIFICATION_PROMPT,
 )
-from agent.schemas import SchemaFieldValidator
 from agent.helpers import classify_fields_with_llm, create_llm
-from memory.sqlite_store import MemoryDatabase
+from agent.schemas import FieldClassification
+from memory.sqlite_store_simplified import MemoryDatabase, FIELD_TO_STATUS_COLUMN, VALID_COLUMNS
 from memory.vector_store import VectorStore
-from memory.models import FixedEntity, MemoryStatus, CustomerMemoryNonPII, CustomerMemoryPII
 from config import SQLITE_PATH, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# FIELD VALIDATION HELPERS
+# ============================================================================
+
+# Per-field type + range rules used for pre-storage validation
+_FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
+    "monthly_income":              (float,  None),
+    "cibil_score":                 (int,    "300-900"),
+    "total_existing_emi_monthly":  (float,  None),
+    "number_of_active_loans":      (int,    ">=0"),
+    "requested_loan_amount":       (float,  None),
+    "requested_tenure_months":     (int,    ">0"),
+    "years_at_job":                (float,  None),
+    "full_name":                   (str,    None),
+    "phone":                       (str,    None),
+    "city":                        (str,    None),
+    "state":                       (str,    None),
+    "pincode":                     (str,    None),
+    "employer_name":               (str,    None),
+    "job_title":                   (str,    None),
+    "income_type":                 (str,    None),
+    "address":                     (str,    None),
+    "requested_loan_type":         (str,    None),
+    "loan_purpose":                (str,    None),
+    "coapplicant_name":            (str,    None),
+    "coapplicant_relation":        (str,    None),
+    "coapplicant_income":          (float,  None),
+    "date_of_birth":               (str,    None),
+}
+
+
+def _validate_field(field_name: str, value: Any) -> Tuple[bool, Any, Optional[str]]:
+    """
+    Validate and coerce a single field value.
+    Returns (is_valid, coerced_value, error_message).
+    Unknown fields pass through (ChromaDB can store anything).
+    """
+    if field_name not in _FIELD_RULES:
+        return True, value, None  # not a schema field — pass to ChromaDB
+
+    expected_type, rule = _FIELD_RULES[field_name]
+
+    # Attempt type coercion
+    try:
+        coerced = expected_type(value)
+    except (ValueError, TypeError):
+        return False, value, f"{field_name}: cannot convert {value!r} to {expected_type.__name__}"
+
+    # Range checks
+    if field_name == "cibil_score" and not (300 <= coerced <= 900):
+        return False, coerced, "cibil_score must be 300-900"
+    if field_name == "requested_tenure_months" and coerced <= 0:
+        return False, coerced, "requested_tenure_months must be > 0"
+    if field_name == "number_of_active_loans" and coerced < 0:
+        return False, coerced, "number_of_active_loans must be >= 0"
+
+    return True, coerced, None
 
 
 # ============================================================================
@@ -39,260 +98,186 @@ logger = logging.getLogger(__name__)
 
 async def handle_memory_update(state: SessionState) -> SessionState:
     """
-    Handle when user provided NEW information (no conflicts).
-    
+    Classify incoming user information and route each piece to the right store.
+
     Flow:
-    1. Classify fields: Is this a schema field or contextual info?
-    2. Validate: If schema field, validate data types and ranges using Pydantic
-    3. Store: 
-       - Schema fields → SQLite (with FixedEntity, status=CONFIRMED)
-       - Contextual → ChromaDB (semantic embeddings + metadata)
-    4. Respond: Acknowledge and thank user
-    
-    Metadata added: session_id, timestamp, source, customer_id, confidence
+      1. Classify fields with LLM → SCHEMA_FIELD (SQLite) vs CONTEXTUAL_INFO (ChromaDB)
+      2. Validate all SCHEMA fields before touching any DB
+      3. FIX #4 — ensure customer row exists before UPDATE (batch_update_fields handles this)
+      4. Batch-write schema fields to SQLite in a single transaction
+      5. Write contextual info to ChromaDB
+      6. Build response
     """
     try:
-        user_input = state.get("user_input", "")
-        customer_id = state.get("customer_id", "")
-        session_id = state.get("session_id", "")
-        
-        if not user_input or not customer_id:
-            state["agent_response"] = "I couldn't process this information. Please try again."
+        user_input  = (state.get("user_input") or "").strip()
+        customer_id = (state.get("customer_id") or "").strip()
+        session_id  = (state.get("session_id") or f"session_{datetime.now().timestamp()}").strip()
+
+        if not user_input:
+            state["agent_response"] = "I didn't receive any information to process."
             return state
-        
-        logger.info("📝 Memory Update Handler (New Info):")
-        logger.info(f"   User Input: {user_input[:100]}...")
-        
-        # ====================================================================
-        # STEP 1: CLASSIFY FIELDS (LLM decides WHERE to store)
-        # ====================================================================
-        logger.info("🏷️  Step 1: Classifying fields...")
-        classifications = await classify_fields_with_llm(user_input)
-        
-        schema_fields = {}
-        contextual_info = {}
-        
-        for field_name, classification in classifications.items():
-            if classification.field_type == "SCHEMA_FIELD":
-                schema_fields[field_name] = classification
+        if not customer_id:
+            logger.error("❌ Missing customer_id in state")
+            state["agent_response"] = "Error: Unable to identify customer."
+            return state
+
+        logger.info(f"📝 Memory Update | {customer_id} | '{user_input[:60]}…'")
+
+        # ------------------------------------------------------------------
+        # Step 1 — Classify fields with LLM
+        # ------------------------------------------------------------------
+        try:
+            classifications: Dict[str, FieldClassification] = await classify_fields_with_llm(user_input)
+        except Exception as e:
+            logger.error(f"❌ Field classification failed: {e}")
+            state["agent_response"] = "I had trouble understanding that. Could you rephrase?"
+            return state
+
+        if not classifications:
+            # LLM found nothing structured — treat as general/contextual note
+            logger.info("ℹ️  No structured fields found — storing as contextual chunk")
+            _store_contextual_chunk(customer_id, session_id, user_input, "general_note")
+            state["agent_response"] = "Got it! I've noted that for reference."
+            state["memory_updates"] = []
+            return state
+
+        schema_fields: Dict[str, FieldClassification] = {}
+        contextual_fields: Dict[str, FieldClassification] = {}
+
+        for name, clf in classifications.items():
+            if clf.field_type == "SCHEMA_FIELD":
+                schema_fields[name] = clf
             else:
-                contextual_info[field_name] = classification
-        
-        logger.info(f"   Schema fields: {len(schema_fields)} | Contextual: {len(contextual_info)}")
-        
-        # ====================================================================
-        # STEP 2: VALIDATE SCHEMA FIELDS (using Pydantic model)
-        # ====================================================================
-        valid_schema_fields = {}
-        failed_validations = []
-        
-        for field_name, classification in schema_fields.items():
-            logger.debug(f"   Validating {field_name}...")
+                contextual_fields[name] = clf
+
+        logger.info(f"   Schema: {len(schema_fields)} | Contextual: {len(contextual_fields)}")
+
+        # ------------------------------------------------------------------
+        # Step 2 — Validate all schema fields (fail-fast before any writes)
+        # ------------------------------------------------------------------
+        valid_schema: Dict[str, Any] = {}
+        validation_errors: Dict[str, str] = {}
+
+        for field_name, clf in schema_fields.items():
+            # Only attempt to store fields that actually exist in the DB schema
+            if field_name not in VALID_COLUMNS:
+                logger.warning(f"⚠️  '{field_name}' not in DB schema — routing to ChromaDB")
+                contextual_fields[field_name] = clf
+                continue
+
+            is_valid, coerced_val, error_msg = _validate_field(
+                field_name, clf.normalized_value
+            )
+            if is_valid:
+                valid_schema[field_name] = coerced_val
+            else:
+                validation_errors[field_name] = error_msg or "Validation failed"
+                logger.warning(f"   ❌ {field_name}: {error_msg}")
+
+        if not valid_schema and schema_fields:
+            err_list = "; ".join(f"{k}: {v}" for k, v in list(validation_errors.items())[:3])
+            state["agent_response"] = f"I couldn't process some details: {err_list}. Please clarify?"
+            return state
+
+        # ------------------------------------------------------------------
+        # Step 3+4 — Batch-write schema fields to SQLite
+        # FIX #4 is inside batch_update_fields (ensure_customer_exists guard)
+        # ------------------------------------------------------------------
+        sqlite_results: Dict[str, bool] = {}
+        if valid_schema:
             try:
-                # Create validator with field data - Pydantic validates automatically
-                validator_data = {field_name: classification.normalized_value}
-                validator = SchemaFieldValidator(**validator_data)
-                
-                # Get the validated/coerced value using model_dump()
-                validated_dict = validator.model_dump(exclude_none=True)
-                normalized_value = validated_dict[field_name]
-                
-                valid_schema_fields[field_name] = {
-                    "field_name": field_name,
-                    "value": normalized_value,
-                    "original": classification.raw_value,
-                    # FieldClassification has no confidence field; default to 1.0
-                    "confidence": getattr(classification, "confidence", 1.0),
-                }
-                logger.debug(f"      ✅ Valid: {normalized_value}")
-                
-            except Exception as e:
-                failed_validations.append((field_name, str(e)))
-                logger.warning(f"      ❌ Invalid: {str(e)}")
-        
-        # ====================================================================
-        # STEP 3a: STORE SCHEMA FIELDS IN SQLITE (BOTH PII & NON-PII)
-        # ====================================================================
-        if valid_schema_fields:
-            logger.info(f"💾 Storing {len(valid_schema_fields)} fields in SQLite...")
-            db = MemoryDatabase(db_path=SQLITE_PATH)
-            db.connect()
-            
-            try:
-                # Load existing customer memory (returns tuple: nonpii, pii)
-                nonpii, pii = db.load_customer_memory(customer_id)
-                
-                # If no existing memory, create new objects
-                if not nonpii:
-                    nonpii = CustomerMemoryNonPII(
+                with MemoryDatabase(db_path=SQLITE_PATH) as db:
+                    db.init_schema()
+                    sqlite_results = db.batch_update_fields(
                         customer_id=customer_id,
-                        created_at=datetime.now(),
-                        last_updated=datetime.now(),
+                        fields=valid_schema,
+                        status="pending",
                     )
-                
-                if not pii:
-                    pii = CustomerMemoryPII(
-                        customer_id=customer_id,
-                        created_at=datetime.now(),
-                        last_updated=datetime.now(),
-                    )
-                
-                # ====================================================================
-                # Map fields to PII vs NonPII
-                # ====================================================================
-                pii_fields = {
-                    'full_name', 'date_of_birth', 'gender', 'marital_status',
-                    'primary_phone', 'current_address', 'city', 'state', 'pincode',
-                    'employer_name', 'years_at_current_job'
-                }
-                
-                # Update each field (to appropriate table)
-                for field_name, field_data in valid_schema_fields.items():
-                    # Get old value for audit trail
-                    old_value = None
-                    if field_name in pii_fields:
-                        if hasattr(pii, field_name) and getattr(pii, field_name):
-                            entity = getattr(pii, field_name)
-                            if entity.current:
-                                old_value = entity.current.value
-                    else:
-                        if hasattr(nonpii, field_name) and getattr(nonpii, field_name):
-                            entity = getattr(nonpii, field_name)
-                            if entity.current:
-                                old_value = entity.current.value
-                    
-                    # Create new confirmed entity
-                    entity = FixedEntity()
-                    entity.add_value(
-                        value=field_data["value"],
-                        session_id=session_id,
-                        status=MemoryStatus.CONFIRMED,
-                    )
-                    entity.confirm()
-                    
-                    if field_name in pii_fields:
-                        # Save to PII table (will be encrypted)
-                        if hasattr(pii, field_name):
-                            setattr(pii, field_name, entity)
-                            logger.info(f"      ✅ {field_name} → PII (encrypted)")
-                    else:
-                        # Save to NonPII table (plaintext)
-                        if hasattr(nonpii, field_name):
-                            setattr(nonpii, field_name, entity)
-                            logger.info(f"      ✅ {field_name} → NonPII (plaintext)")
-                    
-                    # Log field change for audit trail
-                    has_conflict = field_name in state.get("mismatched_fields", {})
-                    try:
-                        db.log_field_change(
-                            customer_id=customer_id,
-                            field_name=field_name,
-                            session_id=session_id,
-                            old_value=str(old_value) if old_value is not None else None,
-                            new_value=str(field_data["value"]),
-                            conflict_detected=has_conflict
-                        )
-                    except Exception as e:
-                        logger.warning(f"⚠️  Failed to log change for {field_name}: {e}")
-                
-                nonpii.last_updated = datetime.now()
-                pii.last_updated = datetime.now()
-                
-                # Ensure session row exists in session_log BEFORE logging field changes.
-                # field_change_log has FK: session_id → session_log(session_id).
-                # end_session saves the full session later; here we just upsert a stub.
-                from memory.models import SessionLog as _SessionLog
-                _stub = _SessionLog(
-                    session_id=session_id,
-                    customer_id=customer_id,
-                    started_at=datetime.now(),
-                    turns=[],
-                )
-                try:
-                    db.save_session(_stub)
-                except Exception:
-                    pass  # already exists or customer row missing — field log will be skipped
-                
-                # Save both tables to SQLite
-                db.save_customer_memory(nonpii, pii)
-                logger.info("✅ SQLite update complete (PII encrypted, NonPII plaintext)")
-                
+                ok = sum(1 for v in sqlite_results.values() if v)
+                logger.info(f"   💾 SQLite: {ok}/{len(valid_schema)} fields written")
             except Exception as e:
-                logger.error(f"❌ SQLite storage failed: {e}")
-            finally:
-                db.close()
-        
-        # ====================================================================
-        # STEP 3b: STORE CONTEXTUAL INFO IN CHROMADB
-        # ====================================================================
-        if contextual_info:
-            logger.info(f"🔍 Storing {len(contextual_info)} contextual items in ChromaDB...")
-            vs = VectorStore(persist_path=CHROMA_PATH)
-            
+                logger.error(f"❌ SQLite batch write failed: {e}")
+                for k in valid_schema:
+                    sqlite_results[k] = False
+
+        # ------------------------------------------------------------------
+        # Step 5 — Write contextual info to ChromaDB
+        # ------------------------------------------------------------------
+        chroma_count = 0
+        if contextual_fields:
             try:
-                for field_name, classification in contextual_info.items():
-                    # Format semantic chunk
-                    chunk_text = f"{classification.field_name}: {classification.raw_value}"
-                    
-                    extra_metadata = {
-                        "type": "memory_update",
-                        "category": classification.category,
-                        "source": "handle_memory_update",
-                        # FieldClassification has no confidence field; default to 1.0
-                        "confidence": str(getattr(classification, "confidence", 1.0)),
-                        "original_text": classification.raw_value,
-                    }
-                    
-                    # Add to ChromaDB
+                vs = VectorStore(persist_path=CHROMA_PATH)
+                for field_name, clf in contextual_fields.items():
+                    chunk_text = f"{clf.field_name or field_name}: {clf.raw_value}"
                     vs.add_chunk(
                         customer_id=customer_id,
                         session_id=session_id,
-                        text=chunk_text,
-                        topic_tag=classification.category,
-                        extra_metadata=extra_metadata,
+                        text=chunk_text[:500],
+                        topic_tag=clf.category or "general",
+                        extra_metadata={
+                            "type":        "memory_update",
+                            "category":    clf.category or "general",
+                            "source":      "handle_memory_update",
+                            "original":    clf.raw_value,
+                        },
                     )
-                    logger.info(f"      ✅ {classification.category}: {chunk_text}")
-                
-                logger.info("✅ ChromaDB update complete")
-                
+                    chroma_count += 1
+                logger.info(f"   🔍 ChromaDB: {chroma_count} contextual chunks stored")
             except Exception as e:
-                logger.error(f"❌ ChromaDB storage failed: {e}")
-        
-        # ====================================================================
-        # STEP 4: GENERATE RESPONSE
-        # ====================================================================
-        update_summary = []
-        if valid_schema_fields:
-            fields_list = ", ".join(valid_schema_fields.keys())
-            update_summary.append(f"updated {len(valid_schema_fields)} profile fields ({fields_list})")
-        
-        if contextual_info:
-            update_summary.append(f"noted {len(contextual_info)} preferences/details")
-        
-        if failed_validations:
-            logger.warning(f"⚠️  Failed validations: {len(failed_validations)}")
-        
-        response = MEMORY_UPDATE_ACKNOWLEDGMENT
-        if update_summary:
-            response += f" I've {' and '.join(update_summary)}."
-        
-        state["agent_response"] = response
+                logger.error(f"❌ ChromaDB write failed: {e}")
+
+        # ------------------------------------------------------------------
+        # Step 6 — Build response
+        # ------------------------------------------------------------------
+        parts = [MEMORY_UPDATE_ACKNOWLEDGMENT]
+
+        saved_fields = [f for f, ok in sqlite_results.items() if ok]
+        if saved_fields:
+            parts.append(f"Saved: {', '.join(saved_fields)}.")
+        if chroma_count:
+            parts.append(f"Also noted {chroma_count} additional detail(s).")
+        if validation_errors:
+            issues = "; ".join(f"{k}: {v}" for k, v in list(validation_errors.items())[:2])
+            parts.append(f"(Could not process: {issues})")
+
+        state["agent_response"] = " ".join(parts)
         state["memory_updates"] = [
-            {"field": name, "value": data["value"], "type": "schema"} 
-            for name, data in valid_schema_fields.items()
+            {"field": f, "value": v, "type": "schema", "status": "pending"}
+            for f, v in valid_schema.items()
         ] + [
-            {"field": name, "value": classification.raw_value, "type": "contextual"} 
-            for name, classification in contextual_info.items()
+            {"field": clf.field_name or k, "value": clf.raw_value, "type": "contextual"}
+            for k, clf in contextual_fields.items()
         ]
-        
-        logger.info(f"✅ Memory update complete: {len(state['memory_updates'])} items processed")
-        
+
+        logger.info(
+            f"✅ Memory update done | {len(saved_fields)} SQLite + {chroma_count} ChromaDB "
+            f"| {len(validation_errors)} failed"
+        )
         return state
-        
+
     except Exception as e:
-        logger.error(f"❌ Memory update handler failed: {e}", exc_info=True)
-        state["agent_response"] = "I encountered an error storing this information. Please try again."
+        logger.error(f"❌ handle_memory_update crashed: {e}", exc_info=True)
+        state["agent_response"] = "I encountered an error storing that information. Please try again."
         return state
+
+
+def _store_contextual_chunk(
+    customer_id: str,
+    session_id: str,
+    text: str,
+    topic_tag: str,
+) -> None:
+    """Helper: store a single text chunk to ChromaDB, swallowing errors."""
+    try:
+        vs = VectorStore(persist_path=CHROMA_PATH)
+        vs.add_chunk(
+            customer_id=customer_id,
+            session_id=session_id,
+            text=text[:500],
+            topic_tag=topic_tag,
+        )
+    except Exception as e:
+        logger.warning(f"⚠️  Contextual chunk store failed: {e}")
 
 
 # ============================================================================
@@ -301,108 +286,77 @@ async def handle_memory_update(state: SessionState) -> SessionState:
 
 async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
     """
-    Handle when user provided CONFLICTING information.
-    
-    Politely asks the user to verify/confirm the new value while mentioning
-    WHEN the previous information was recorded.
-    
-    Router has already identified:
-    1. has_mismatch: True (there are conflicts)
-    2. mismatched_fields: {field: {old_value, new_value, ...}}
-    3. dynamic_context: Historical info from ChromaDB (may contain timestamps)
+    User provided info that CONFLICTS with existing stored data.
+    Show the user a clear picture of what we have vs what they said,
+    and ask them to confirm which value is correct.
+
+    If no real mismatches found (router over-triggered), delegate to
+    handle_memory_update so data is never silently dropped.
     """
     try:
-        mismatches = state.get("mismatched_fields", {})
+        mismatches      = state.get("mismatched_fields", {})
         dynamic_context = state.get("dynamic_context", [])
         confirmed_facts = state.get("confirmed_facts", {})
-        
-        logger.info("🔍 Mismatch Confirmation Handler:")
-        logger.info(f"   Conflicts Found: {len(mismatches)}")
-        logger.info(f"   Fields: {list(mismatches.keys())}")
-        
+
+        logger.info(f"🔍 Mismatch handler | {len(mismatches)} conflict(s)")
+
         if not mismatches:
-            # Router predicted a conflict but the second LLM pass found none.
-            # This happens when there are no confirmed facts yet to compare against.
-            # Treat it as a normal memory update so the data is not silently dropped.
-            logger.warning("⚠️  No mismatches found despite routing to mismatch handler — delegating to memory update")
+            # Router over-triggered — no actual conflict found. Treat as memory update.
+            logger.warning("⚠️  No mismatches found — delegating to handle_memory_update")
             return await handle_memory_update(state)
-        
-        # ====================================================================
-        # BUILD MISMATCH DETAILS WITH EXPLANATIONS FROM LLM
-        # ====================================================================
-        mismatch_details_parts = []
-        for field, conflict_info in mismatches.items():
-            old_val = conflict_info.get("old_value", "unknown")
-            new_val = conflict_info.get("new_value", "unknown")
-            confidence = conflict_info.get("confidence", 0.0)
-            explanation = conflict_info.get("explanation", "Data changed")
-            
-            detail = f"• {field.replace('_', ' ').title()}\n"
-            detail += f"  Previous: {old_val}\n"
-            detail += f"  Current: {new_val}\n"
-            detail += f"  Status: {explanation}\n"
-            detail += f"  Confidence: {confidence:.0%}"
-            
-            mismatch_details_parts.append(detail)
-        
-        mismatch_details = "\n\n".join(mismatch_details_parts)
-        
-        # ====================================================================
-        # BUILD HISTORICAL CONTEXT (hint at when old data was recorded)
-        # ====================================================================
-        # Try to extract timeline info from ChromaDB results
-        historical_context = "Unknown date"
-        
+
+        # Build human-readable conflict details
+        conflict_parts: List[str] = []
+        for field, info in mismatches.items():
+            old_val    = info.get("old_value", "unknown")
+            new_val    = info.get("new_value", "unknown")
+            explanation = info.get("explanation", "Value changed")
+            confidence  = info.get("confidence", 0.0)
+
+            conflict_parts.append(
+                f"• {field.replace('_', ' ').title()}\n"
+                f"  On file  : {old_val}\n"
+                f"  You said : {new_val}\n"
+                f"  Note     : {explanation} (confidence: {confidence:.0%})"
+            )
+
+        mismatch_details = "\n\n".join(conflict_parts)
+
+        # Historical context hint (extract rough date from ChromaDB text)
+        historical_context = "a previous session"
         if dynamic_context:
-            # Look for date/time references in context
-            context_text = " ".join(dynamic_context[:3])
-            
-            # Simple date extraction (you can enhance this with better parsing)
-            if "Monday" in context_text or "Tuesday" in context_text or \
-               "Wednesday" in context_text or "Thursday" in context_text or \
-               "Friday" in context_text or "Saturday" in context_text or \
-               "Sunday" in context_text or "ago" in context_text:
-                historical_context = context_text[:200]  # Use first 200 chars
-            else:
-                # Fallback: mention it was previously recorded
-                historical_context = "a previous session"
-        
-        # ====================================================================
-        # PREPARE CONTEXT FOR LLM CHAIN
-        # ====================================================================
+            ctx_text = " ".join(dynamic_context[:2])
+            days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            if any(d in ctx_text for d in days) or "ago" in ctx_text:
+                historical_context = ctx_text[:200]
+
         customer_profile = json.dumps(confirmed_facts, indent=2) if confirmed_facts else "{}"
-        
-        # ====================================================================
-        # INVOKE MISMATCH VERIFICATION PROMPT WITH LLM
-        # ====================================================================
-        llm = create_llm(temperature=0.5)  # Balanced - professional but warm
-        
+
+        llm   = create_llm(temperature=0.4)
         chain = MISMATCH_VERIFICATION_PROMPT | llm
-        
-        response = await chain.ainvoke(
-            {
-                "mismatch_details": mismatch_details,
-                "historical_context": historical_context,
-                "customer_profile": customer_profile,
-            }
+
+        response = await chain.ainvoke({
+            "mismatch_details":   mismatch_details,
+            "historical_context": historical_context,
+            "customer_profile":   customer_profile,
+        })
+
+        confirmation_msg = (
+            response.content if hasattr(response, "content") else str(response)
         )
-        
-        confirmation_message = response.content if hasattr(response, 'content') else str(response)
-        
-        state["clarification_question"] = confirmation_message
-        state["clarification_needed"] = True
-        state["agent_response"] = confirmation_message
-        
-        logger.info("❓ Polite mismatch confirmation request generated")
-        logger.info(f"   Asking customer to confirm {len(mismatches)} field(s)")
-        
+
+        state["clarification_question"] = confirmation_msg
+        state["clarification_needed"]   = True
+        state["agent_response"]         = confirmation_msg
+
+        logger.info(f"❓ Mismatch confirmation sent for {len(mismatches)} field(s)")
         return state
-        
+
     except Exception as e:
-        logger.error(f"❌ Mismatch confirmation handler failed: {e}")
+        logger.error(f"❌ handle_mismatch_confirmation failed: {e}", exc_info=True)
         state["agent_response"] = (
-            "I noticed some differences in your information and I'd like to verify them with you. "
-            "Could you please confirm the current details? "
+            "I noticed some differences in the information you provided versus what we have on file. "
+            "Could you please confirm your current details so we can keep your profile accurate?"
         )
         return state
 
@@ -413,45 +367,38 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
 
 async def handle_query(state: SessionState) -> SessionState:
     """
-    Answer questions using confirmed facts and context.
-    
-    Uses ChatOllama with structured prompts from prompts.py for consistency
-    and maintainability.
+    Answer the user's question using confirmed facts + ChromaDB context.
+    Low temperature for factual accuracy.
     """
     try:
-        user_input = state.get("user_input", "")
-        facts = state.get("confirmed_facts", {})
-        context = state.get("dynamic_context", [])[:2]
-        
-        # Prepare context summaries
-        facts_summary = json.dumps(facts, indent=2) if facts else "No confirmed facts"
-        context_summary = "\n".join(context) if context else "No available context"
-        
-        # Create LLM chain
-        llm = create_llm(temperature=0.3)  # Lower temp for factual responses
-        
-        # Use the query prompt from prompts.py
+        user_input      = state.get("user_input", "")
+        facts           = state.get("confirmed_facts", {})
+        context         = state.get("dynamic_context", [])[:3]
+
+        facts_summary   = json.dumps(facts, indent=2) if facts else "No confirmed facts on file yet."
+        context_summary = "\n".join(context) if context else "No additional context available."
+
+        llm   = create_llm(temperature=0.2)
         chain = QUERY_ANSWER_CHAT_PROMPT | llm
-        
-        response = await chain.ainvoke(
-            {
-                "user_input": user_input,
-                "facts_summary": facts_summary,
-                "context_summary": context_summary,
-            }
-        )
-        
-        answer = response.content if hasattr(response, 'content') else str(response)
-        
+
+        response = await chain.ainvoke({
+            "user_input":     user_input,
+            "facts_summary":  facts_summary,
+            "context_summary": context_summary,
+        })
+
+        answer = response.content if hasattr(response, "content") else str(response)
+
         state["query_response"] = answer
         state["agent_response"] = answer
         logger.info("💬 Query answered")
-        
         return state
-        
+
     except Exception as e:
-        logger.error(f"❌ Query handler failed: {e}")
-        state["agent_response"] = "I apologize, I'm unable to answer that question at the moment. Please try again."
+        logger.error(f"❌ handle_query failed: {e}", exc_info=True)
+        state["agent_response"] = (
+            "I'm unable to answer that question right now. Please try again."
+        )
         return state
 
 
@@ -461,42 +408,35 @@ async def handle_query(state: SessionState) -> SessionState:
 
 async def handle_general(state: SessionState) -> SessionState:
     """
-    General conversation with memory injection.
-    
-    Uses ChatOllama with structured prompts from prompts.py.
-    Injects customer context to personalize responses.
+    General conversation handler with context injection.
+    Slightly higher temperature for a conversational feel.
     """
     try:
-        user_input = state.get("user_input", "")
-        facts = state.get("confirmed_facts", {})
-        context = state.get("dynamic_context", [])[:2]
-        
-        # Prepare context summaries
-        facts_summary = json.dumps(facts, indent=2) if facts else "No customer profile yet"
-        context_summary = "\n".join(context) if context else "No previous context"
-        
-        # Create LLM chain
-        llm = create_llm(temperature=0.7)  # Slightly higher for conversational tone
-        
-        # Use the general response prompt from prompts.py
+        user_input      = state.get("user_input", "")
+        facts           = state.get("confirmed_facts", {})
+        context         = state.get("dynamic_context", [])[:2]
+
+        facts_summary   = json.dumps(facts, indent=2) if facts else "No customer profile yet."
+        context_summary = "\n".join(context) if context else "No previous context."
+
+        llm   = create_llm(temperature=0.7)
         chain = GENERAL_RESPONSE_PROMPT | llm
-        
-        response = await chain.ainvoke(
-            {
-                "user_input": user_input,
-                "facts_summary": facts_summary,
-                "context_summary": context_summary,
-            }
-        )
-        
-        answer = response.content if hasattr(response, 'content') else str(response)
-        
+
+        response = await chain.ainvoke({
+            "user_input":     user_input,
+            "facts_summary":  facts_summary,
+            "context_summary": context_summary,
+        })
+
+        answer = response.content if hasattr(response, "content") else str(response)
+
         state["agent_response"] = answer
-        logger.info("💬 Response sent")
-        
+        logger.info("💬 General response sent")
         return state
-        
+
     except Exception as e:
-        logger.error(f"❌ General handler failed: {e}")
-        state["agent_response"] = "I encountered an error while processing your request. Please try again."
+        logger.error(f"❌ handle_general failed: {e}", exc_info=True)
+        state["agent_response"] = (
+            "I encountered an error processing your request. Please try again."
+        )
         return state

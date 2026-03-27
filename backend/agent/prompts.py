@@ -6,6 +6,89 @@ Centralized prompt management for reusable, testable, and maintainable prompt en
 
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_database_schema_reference() -> str:
+    """Return the complete database schema reference for prompts."""
+    return DATABASE_SCHEMA_REFERENCE.strip()
+
+
+# ============================================================================
+# DATABASE SCHEMA REFERENCE
+# ============================================================================
+
+DATABASE_SCHEMA_REFERENCE = """
+CUSTOMER MEMORY DATABASE SCHEMA
+================================
+
+All customer data is stored in a single 'customer_memory' table with the following fields.
+When the agent needs to store information, refer to this schema to know what fields are available.
+
+📋 IDENTITY FIELDS:
+  - full_name (string): Customer's complete full name
+    Status: full_name_status ("pending" or "confirmed")
+  - date_of_birth (string): Date in ISO format (YYYY-MM-DD)
+    Status: date_of_birth_status ("pending" or "confirmed")
+  - phone (string): Primary contact phone number (10-digit or with country code)
+    Status: phone_status ("pending" or "confirmed")
+
+🏠 ADDRESS FIELDS:
+  - address (string): Full residential address
+  - city (string): City name
+  - state (string): State/Province name
+  - pincode (string): Postal/ZIP code
+    Status: address_status (all address fields use this single status)
+
+💼 EMPLOYMENT FIELDS:
+  - employer_name (string): Name of current employer/company
+  - job_title (string): Current job title/designation
+  - years_at_job (decimal): Years worked at current position (e.g., 5.5)
+    Status: employment_status ("pending" or "confirmed")
+
+💰 INCOME & FINANCIAL FIELDS:
+  - monthly_income (decimal): Monthly income in rupees
+    Status: income_status ("pending" or "confirmed")
+  - income_type (string): Type of income - "salaried", "self_employed", or "rental"
+  - cibil_score (integer): Credit CIBIL score (typically 300-900)
+    Status: cibil_status ("pending" or "confirmed")
+  - total_existing_emi_monthly (decimal): Total EMI payment per month
+  - number_of_active_loans (integer): Count of active loans
+    Status: loans_status (applies to EMI and active loans)
+
+🏦 LOAN REQUEST FIELDS:
+  - requested_loan_type (string): Type of loan - "home", "auto", or "personal"
+  - requested_loan_amount (decimal): Requested loan amount in rupees
+  - requested_tenure_months (integer): Loan tenure in months
+  - loan_purpose (string): Purpose of the loan
+    Status: loan_request_status ("pending" or "confirmed")
+
+👥 CO-APPLICANT FIELDS:
+  - coapplicant_name (string): Co-applicant's full name (if any)
+  - coapplicant_relation (string): Relationship - "spouse", "sibling", or "parent"
+  - coapplicant_income (decimal): Co-applicant's monthly income
+    Status: coapplicant_status ("pending" or "confirmed")
+
+📱 APPLICATION FIELDS:
+  - application_status (string): Status of application
+    Values: "incomplete", "complete", "processing", "approved", "rejected", "on_hold"
+  - documents_submitted (string): Comma-separated list of submitted documents
+    Examples: "aadhar,pan,income_proof" or "bank_statement,payslip"
+
+🗓️ METADATA FIELDS:
+  - customer_id (string): Unique customer identifier
+  - created_at (datetime): When customer record was created
+  - last_updated (datetime): When customer record was last updated
+
+STATUS FIELD RULES:
+  - Each field group has a corresponding _status field
+  - Values: "pending" (mentioned but not confirmed) or "confirmed" (verified by customer)
+  - When storing new information, default status is "pending"
+  - Upgrade to "confirmed" when customer explicitly confirms
+"""
+
 # ============================================================================
 # ROUTER NODE PROMPTS
 # ============================================================================
@@ -169,6 +252,18 @@ Provide a friendly, helpful response.""")
 # MEMORY UPDATE PROMPTS
 # ============================================================================
 
+MEMORY_UPDATE_SCHEMA_INSTRUCTION = f"""
+IMPORTANT: When storing customer information, map it to the following database fields:
+
+{DATABASE_SCHEMA_REFERENCE}
+
+For each field you update:
+1. Set status to "pending" (default for new information from customer)
+2. Use exact field names as shown above
+3. Validate data types (numbers, dates, strings)
+4. Normalize values (trim spaces, capitalize names, format phone numbers)
+"""
+
 MEMORY_CONFLICT_TEMPLATE = """I've noticed some differences in your information:
 
 {conflicts}
@@ -279,42 +374,40 @@ CONFLICT_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
 # FIELD CLASSIFICATION PROMPTS (For handle_memory_update - Decide WHERE to store)
 # ============================================================================
 
-FIELD_CLASSIFICATION_SYSTEM_PROMPT = """You are a data classification system for a loan platform.
+FIELD_CLASSIFICATION_SYSTEM_PROMPT = f"""You are a data classification system for a loan platform.
 
-Your job is to analyze customer information and classify it into two categories:
+Your job is to analyze customer information and classify it into appropriate database fields.
 
-1. **SCHEMA_FIELD**: Structured data that matches our database schema
-   - Examples: monthly_income, employment, cibil_score, loan_amount, full_name, address
-   - Store in: SQLite (with type validation)
-   - Characteristics: Factual, specific, well-defined field
+DATABASE SCHEMA AVAILABLE:
+{DATABASE_SCHEMA_REFERENCE}
 
-2. **CONTEXTUAL_INFO**: Behavioral/preference/situational data NOT in schema
-   - Examples: communication preferences, concerns, moods, intent, future plans
-   - Store in: ChromaDB (as semantic embeddings)
-   - Characteristics: Nuanced, conversational, contextual
+CLASSIFICATION RULES:
+1. For each piece of information the customer provides, identify the matching field from the schema
+2. Determine the appropriate value type (string, decimal, integer)
+3. Indicate if this is new information (status="pending") or confirmed (status="confirmed")
+4. Map to existing fields when possible, or flag as contextual if it doesn't fit the schema
 
-Database Schema Fields Available:
-- Structured: monthly_income, cibil_score, employment, total_work_experience_years, 
-             loan_amount, tenure_months, number_of_active_loans
-- Personal: full_name, date_of_birth, primary_phone, current_address, city, state, pincode
-- Relations: co_applicants, guarantors
-- Loan: loan_type, loan_purpose, loan_request
+EXAMPLES OF FIELD MATCHING:
+- "I earn 50,000 per month" → monthly_income = 50000, income_status = "pending"
+- "I work at Tech Corp as Senior Engineer for 5 years" → employer_name = "Tech Corp", job_title = "Senior Engineer", years_at_job = 5, employment_status = "pending"
+- "I want a home loan of 25 lakhs" → requested_loan_type = "home", requested_loan_amount = 2500000, loan_request_status = "pending"
+- "My name is Rajesh Kumar" → full_name = "Rajesh Kumar", full_name_status = "pending"
+- "I have 2 active loans with 15k EMI" → number_of_active_loans = 2, total_existing_emi_monthly = 15000, loans_status = "pending"
+"""
 
-For each piece of information, determine:
-1. Is it in the schema? (YES → SCHEMA_FIELD | NO → CONTEXTUAL_INFO)
-2. What is the field name (if schema)?
-3. What is the semantic meaning (if contextual)?"""
-
-FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information.
+FIELD_CLASSIFICATION_USER_PROMPT = """Classify this customer information against the database schema.
 
 CUSTOMER STATEMENT:
 "{user_input}"
 
-For each piece of information mentioned, classify it:
-- If it matches our schema → field name and value
-- If it's contextual → semantic meaning and category
+For each piece of information mentioned, provide:
+1. Field name (from the schema above)
+2. Field value (normalized/cleaned)
+3. Field status ("pending" for new information)
+4. Data type (string, integer, decimal)
+5. Confidence level (0.0-1.0)
 
-Provide classification in JSON format."""
+If information doesn't match any schema field, indicate it as "contextual" for ChromaDB storage."""
 
 FIELD_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", FIELD_CLASSIFICATION_SYSTEM_PROMPT),
@@ -326,32 +419,58 @@ FIELD_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
 # ENTITY EXTRACTION PROMPTS (Extract structured data from user input)
 # ============================================================================
 
-ENTITY_EXTRACTION_SYSTEM_PROMPT = """You are an entity extraction system for a loan platform.
+ENTITY_EXTRACTION_SYSTEM_PROMPT = f"""You are an entity extraction system for a loan platform.
 
-Your job is to extract structured entities from customer conversations.
+Your job is to extract structured entities from customer conversations and map them to database fields.
 
-EXTRACT:
-1. All factual information (income, employment, etc.)
-2. Contextual information (preferences, concerns, plans)
-3. For each, provide:
-   - Raw value (exactly as customer said)
-   - Normalized value (cleaned, typed, validated)
-   - Confidence (0.0-1.0)
-   - Category (income | employment | personal | communication | concern | intent | other)
-   - Should be stored in: SQLite or ChromaDB"""
+DATABASE SCHEMA AVAILABLE:
+{DATABASE_SCHEMA_REFERENCE}
 
-ENTITY_EXTRACTION_USER_PROMPT = """Extract all entities from this customer statement.
+EXTRACTION INSTRUCTIONS:
+1. Identify all factual information the customer mentions
+2. Map each to the corresponding database field from the schema
+3. Normalize the value (clean, type-cast, validate format)
+4. Provide confidence level (0.0-1.0)
+5. Indicate the appropriate status (typically "pending" for new information)
+
+EXTRACTION EXAMPLES:
+- "I earn 50,000 per month in my salaried job" 
+  → monthly_income: 50000, income_status: "pending"
+  → income_type: "salaried", income_status: "pending"
+
+- "I'm Rajesh Kumar, live in Bangalore" 
+  → full_name: "Rajesh Kumar", full_name_status: "pending"
+  → city: "Bangalore", address_status: "pending"
+
+- "I need a home loan for 25 lakhs over 20 years"
+  → requested_loan_type: "home", loan_request_status: "pending"
+  → requested_loan_amount: 2500000, loan_request_status: "pending"
+  → requested_tenure_months: 240, loan_request_status: "pending"
+
+For each entity, provide:
+- field_name: The database field name
+- raw_value: Exactly what the customer said
+- normalized_value: Cleaned/processed value
+- data_type: string, integer, or decimal
+- confidence: 0.0-1.0
+- status: Typically "pending" for new information
+"""
+
+ENTITY_EXTRACTION_USER_PROMPT = """Extract all entities from this customer statement and map to database fields.
 
 CUSTOMER STATEMENT:
 "{user_input}"
 
-For each entity, determine:
-1. Raw value (exact text from customer)
-2. Normalized value (cleaned/processed)
-3. Type (string, number, date, etc.)
-4. Category (income, employment, personal, communication, concern, intent, other)
-5. Storage target (SQLite or ChromaDB)
-6. Confidence (0.0-1.0)"""
+For each entity found:
+1. Database field name (from schema)
+2. Raw value (exact customer words)
+3. Normalized value (cleaned/validated)
+4. Data type
+5. Status (pending/confirmed - usually "pending" for new info)
+6. Confidence (0.0-1.0)
+7. Any validation notes (format issues, type conversion, etc.)
+
+Return as structured data."""
 
 ENTITY_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", ENTITY_EXTRACTION_SYSTEM_PROMPT),
