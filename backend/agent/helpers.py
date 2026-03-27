@@ -18,7 +18,7 @@ from langchain_ollama import ChatOllama
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent.schemas import FieldClassification, FieldClassificationResult
-from agent.prompts import FIELD_CLASSIFICATION_PROMPT
+from agent.prompts import FIELD_CLASSIFICATION_PROMPT, QUERY_REWRITE_PROMPT
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,43 @@ def format_conversation_history(messages: List[Dict[str, str]], max_turns: int =
     
     return "\n".join(history_lines) if history_lines else "No previous conversation"
 
+
+async def rewrite_query_for_retrieval(
+    user_input: str,
+    conversation_history: str,
+) -> str:
+    """
+    Context-aware query rewriting for ChromaDB retrieval.
+
+    Instead of using the raw user message (which may contain pronouns,
+    vague references, or conversational phrasing), ask the LLM to produce
+    a compact, keyword-dense retrieval query.
+
+    Examples:
+        "what did I say about my job earlier?" →
+            "employment, employer name, job title, work experience, income source"
+
+        "Mine" (in context of income question) →
+            "monthly income, salary, income amount"
+
+    Falls back to the original user_input if the LLM call fails.
+    """
+    try:
+        llm = create_llm(temperature=0.1)  # Very low temp — deterministic
+        chain = QUERY_REWRITE_PROMPT | llm
+        response = await chain.ainvoke({
+            "user_input":           user_input,
+            "conversation_history": conversation_history or "No prior conversation",
+        })
+        rewritten = (response.content if hasattr(response, "content") else str(response)).strip()
+        # Sanity check — empty or too long → fall back
+        if not rewritten or len(rewritten) > 200:
+            return user_input
+        logger.info(f"🔍 Query rewritten: '{user_input[:40]}' → '{rewritten[:60]}'")
+        return rewritten
+    except Exception as e:
+        logger.warning(f"⚠️  Query rewrite failed (using original): {e}")
+        return user_input
 
 
 async def classify_fields_with_llm(

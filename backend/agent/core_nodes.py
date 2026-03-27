@@ -2,10 +2,10 @@
 Core infrastructure nodes for LangGraph workflow.
 
 Nodes:
-- check_token_threshold: Count tokens; summarize + trim if threshold exceeded
-- load_memory: Retrieve customer context from SQLite + ChromaDB
-- router: LLM-based intelligent routing to appropriate handler
-- end_session: Persist all updates after session completes
+- check_token_threshold : Count tokens; LLM-summarize + trim if over threshold
+- load_memory           : Load SQLite facts + ChromaDB context → memory_prompt_block
+- router                : Route to handler (programmatic overrides → LLM decision)
+- end_session           : Append assistant turn; write real LLM summary to ChromaDB
 """
 
 import sys
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.state import SessionState
 from agent.prompts import ROUTER_PROMPT
 from agent.schemas import RouterDecision
-from agent.helpers import format_conversation_history, create_llm
+from agent.helpers import format_conversation_history, create_llm, rewrite_query_for_retrieval
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.retriever import MemoryRetriever
@@ -34,36 +34,32 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Token counting utility (tiktoken — already in pyproject deps)
+# Token counter
 # ---------------------------------------------------------------------------
 
 def _count_tokens(messages: List[Dict[str, str]]) -> int:
-    """
-    Count total tokens across all messages using tiktoken cl100k_base.
-    Falls back to a rough char/4 estimate if tiktoken unavailable.
-    """
+    """tiktoken cl100k_base; falls back to char/4 estimate."""
     try:
         import tiktoken
         enc = tiktoken.get_encoding("cl100k_base")
         return sum(len(enc.encode(m.get("content", "") or "")) for m in messages)
     except Exception:
-        # Rough fallback: ~4 chars per token
         return sum(len(m.get("content", "") or "") // 4 for m in messages)
 
 
 # ============================================================================
 # NODE 1: CHECK_TOKEN_THRESHOLD
-# FIX #6 — actually count tokens, summarize old messages if over threshold
 # ============================================================================
 
 async def check_token_threshold(state: SessionState) -> SessionState:
     """
-    Count tokens in current message history.
-    If ≥ 80 % of context window → LLM-summarize the older half, trim buffer,
-    recount tokens, and store summary to ChromaDB for cross-session recall.
-
-    Runs FIRST in every session turn.
+    Count tokens in message history.
+    If ≥ 80 % of context window:
+      - LLM-summarizes the older half of messages
+      - Replaces them with a single system summary entry
+      - Persists summary to ChromaDB for cross-session recall
     """
     try:
         messages: List[Dict[str, str]] = state.get("messages") or []
@@ -71,51 +67,42 @@ async def check_token_threshold(state: SessionState) -> SessionState:
         state["total_tokens"] = current_tokens
 
         threshold = int(SESSION_CONTEXT_WINDOW * TOKEN_THRESHOLD_PERCENT)
-        logger.info(f"📊 Token Check: {current_tokens}/{threshold} (window={SESSION_CONTEXT_WINDOW})")
+        logger.info(f"📊 Tokens: {current_tokens}/{threshold}")
 
         if current_tokens >= threshold and len(messages) > 2:
-            logger.warning("⚠️  Token threshold exceeded — summarizing older messages")
+            logger.warning("⚠️  Threshold exceeded — summarizing older half")
 
-            # Keep the most recent 50 % of messages intact; summarize the rest
-            split = max(1, len(messages) // 2)
+            split     = max(1, len(messages) // 2)
             old_msgs  = messages[:split]
             keep_msgs = messages[split:]
 
-            # Build summary prompt
             old_text = "\n".join(
                 f"{m.get('role','?').upper()}: {m.get('content','')}" for m in old_msgs
             )
             summary_prompt = (
-                "Summarize the following loan advisor conversation concisely, "
-                "preserving all key facts (income, loan amount, employment, CIBIL, "
-                "decisions made, and open questions):\n\n" + old_text
+                "Summarize this loan advisor conversation in 2-3 sentences. "
+                "Keep all key facts: income, loan amount, employment, CIBIL, "
+                "decisions, and open questions. Skip pleasantries.\n\n" + old_text
             )
 
             try:
                 llm = create_llm(temperature=0.2)
-                summary_resp = await llm.ainvoke(summary_prompt)
-                summary_text = (
-                    summary_resp.content
-                    if hasattr(summary_resp, "content")
-                    else str(summary_resp)
-                )
+                resp = await llm.ainvoke(summary_prompt)
+                summary_text = resp.content if hasattr(resp, "content") else str(resp)
             except Exception as e:
-                logger.error(f"❌ Summarization LLM call failed: {e}")
-                # Soft fallback: just trim without a meaningful summary
-                summary_text = f"[Earlier conversation ({len(old_msgs)} messages) — details omitted to save context]"
+                logger.error(f"❌ Summarization failed: {e}")
+                summary_text = f"[{len(old_msgs)} earlier messages summarized]"
 
-            # Replace old messages with a single summary entry
-            summary_entry: Dict[str, str] = {
+            state["messages"] = [{
                 "role": "system",
-                "content": f"[Conversation summary — earlier turns]: {summary_text}",
+                "content": f"[Earlier conversation summary]: {summary_text}",
                 "timestamp": datetime.now().isoformat(),
-            }
-            state["messages"] = [summary_entry] + keep_msgs
-            state["total_tokens"] = _count_tokens(state["messages"])
+            }] + keep_msgs
+            state["total_tokens"]    = _count_tokens(state["messages"])
             state["should_summarize"] = True
-            state["summary"] = summary_text
+            state["summary"]          = summary_text
 
-            # Persist summary to ChromaDB for cross-session recall
+            # Persist real LLM summary to ChromaDB
             customer_id = state.get("customer_id")
             session_id  = state.get("session_id")
             if customer_id and session_id:
@@ -126,44 +113,36 @@ async def check_token_threshold(state: SessionState) -> SessionState:
                         session_id=session_id,
                         summary_text=summary_text,
                     )
-                    logger.info("📄 In-session summary persisted to ChromaDB")
+                    logger.info(f"📄 In-session summary → ChromaDB: {summary_text[:80]}…")
                 except Exception as e:
-                    logger.warning(f"⚠️  Could not persist summary to ChromaDB: {e}")
+                    logger.warning(f"⚠️  ChromaDB summary write failed: {e}")
 
-            logger.info(
-                f"✅ Compressed: {current_tokens} → {state['total_tokens']} tokens "
-                f"({len(old_msgs)} messages summarized)"
-            )
+            logger.info(f"✅ Compressed: {current_tokens} → {state['total_tokens']} tokens")
         else:
             state["should_summarize"] = False
-            state["summary"] = None
+            state["summary"]          = None
 
         return state
 
     except Exception as e:
         logger.error(f"❌ check_token_threshold failed: {e}", exc_info=True)
-        state["error"] = str(e)
+        state["error"]           = str(e)
         state["should_summarize"] = False
         return state
 
 
 # ============================================================================
 # NODE 2: LOAD_MEMORY
-# FIX #3 — use "document" key (not "text") when reading ChromaDB results
-# FIX #5 — never reset messages; only initialise if truly absent
 # ============================================================================
 
 async def load_memory(state: SessionState) -> SessionState:
     """
-    Load customer context from SQLite (facts) + ChromaDB (semantic chunks + summaries).
+    Build memory_prompt_block from 3 tiers:
+      Tier 1 — SQLite structured facts (all known customer data)
+      Tier 2 — ChromaDB top-K contextual chunks (semantic match to query)
+      Tier 3 — ChromaDB real LLM session summaries (cross-session recall)
 
-    Uses MemoryRetriever to build a full 3-tier context block:
-      Tier 1 — SQLite  : all known structured facts (income, CIBIL, employer …)
-      Tier 2 — ChromaDB: top-K semantically relevant contextual chunks
-      Tier 3 — ChromaDB: last N session summaries
-
-    Does NOT write to ChromaDB — only reads.
-    Does NOT reset message history — only appends the current user input.
+    Appends current user turn to messages. Does NOT reset history.
     """
     try:
         customer_id = state.get("customer_id")
@@ -171,10 +150,9 @@ async def load_memory(state: SessionState) -> SessionState:
             state["error"] = "No customer_id in state"
             return state
 
-        session_id = state.get("session_id", f"session_{datetime.now().timestamp()}")
         user_input = (state.get("user_input") or "").strip()
 
-        # Preserve existing messages (do NOT reset)
+        # Init message list only if truly absent
         if "messages" not in state or state["messages"] is None:
             state["messages"] = []
 
@@ -186,40 +164,43 @@ async def load_memory(state: SessionState) -> SessionState:
                 "timestamp": datetime.now().isoformat(),
             })
 
-        # ----------------------------------------------------------------
-        # Use MemoryRetriever for full 3-tier context
-        # ----------------------------------------------------------------
+        # Build 3-tier context
         try:
+            # Rewrite the raw user query into a keyword-dense retrieval query
+            # before passing it to ChromaDB — improves semantic match quality
+            messages_so_far = state.get("messages") or []
+            conv_history = format_conversation_history(messages_so_far[:-1]) if messages_so_far else "No prior conversation"
+            retrieval_query = await rewrite_query_for_retrieval(
+                user_input=user_input or "general customer profile",
+                conversation_history=conv_history,
+            )
+
             retriever = MemoryRetriever(
                 db=MemoryDatabase(db_path=SQLITE_PATH),
                 vector_store=VectorStore(persist_path=CHROMA_PATH),
             )
-            context_result = retriever.build_context(
+            ctx = retriever.build_context(
                 customer_id=customer_id,
-                current_turn=user_input or "general",
+                current_turn=retrieval_query,   # ← rewritten, not raw
                 n_chunks=VECTOR_SEARCH_TOP_K,
                 n_summaries=2,
             )
             retriever.close()
 
-            # Tier 1 — load structured facts as grouped dict
             with MemoryDatabase(db_path=SQLITE_PATH) as db:
                 db.init_schema()
                 customer_facts = db.get_all_facts_grouped(customer_id)
 
             state["customer_facts"]      = customer_facts
-            state["memory_prompt_block"] = context_result["prompt_block"]
+            state["memory_prompt_block"] = ctx["prompt_block"]
             state["dynamic_context"]     = [
-                r["document"] for r in context_result["relevant_chunks"]
-                if r.get("document")
+                r["document"] for r in ctx["relevant_chunks"] if r.get("document")
             ]
             state["session_summaries"]   = [
-                s["document"] for s in context_result["session_summaries"]
-                if s.get("document")
+                s["document"] for s in ctx["session_summaries"] if s.get("document")
             ]
             logger.info(
-                f"✅ Memory loaded for {customer_id}: "
-                f"{len(customer_facts)} fact groups | "
+                f"✅ Memory: {len(customer_facts)} fact groups | "
                 f"{len(state['dynamic_context'])} chunks | "
                 f"{len(state['session_summaries'])} summaries"
             )
@@ -244,81 +225,67 @@ async def load_memory(state: SessionState) -> SessionState:
 
 async def router(state: SessionState) -> SessionState:
     """
-    LLM-based router using structured output binding (RouterDecision).
-    Decides which handler node to invoke next.
+    Routing priority:
+      1. HITL pending fields   → handle_save_confirmation   (programmatic)
+      2. Detected mismatches   → handle_mismatch_confirmation (programmatic)
+      3. LLM decision          → handle_query | handle_general
     """
     try:
-        user_input      = state.get("user_input", "")
-        customer_facts  = state.get("customer_facts", {})
-        dynamic_context = state.get("dynamic_context", [])
-
+        user_input = state.get("user_input", "")
         if not user_input:
             state["next_handler"] = "handle_general"
-            state["error"] = "No user input provided"
-            logger.warning("⚠️  Router: no user input — defaulting to handle_general")
+            state["error"]        = "No user input"
             return state
 
-        # Prepare context strings for the prompt
-        messages        = state.get("messages") or []
-        # Exclude the current message (last item) from history shown to router
-        conv_history    = format_conversation_history(messages[:-1])
-        memory_context  = state.get("memory_prompt_block", "No context available")
+        messages      = state.get("messages") or []
+        conv_history  = format_conversation_history(messages[:-1], max_turns=6)
+        memory_ctx    = state.get("memory_prompt_block") or "No context available"
 
-        # 1a. HITL Save Override — financial fields pending user confirmation
-        pending_fields = state.get("pending_fields", {})
-        if pending_fields and not state.get("memory_mismatches"):
-            logger.info(f"⏳ Router overridden by HITL save: {list(pending_fields.keys())}")
+        # 1. HITL override
+        if state.get("pending_fields") and not state.get("memory_mismatches"):
             state["next_handler"]      = "handle_save_confirmation"
-            state["router_reasoning"]  = "Financial fields staged for user confirmation"
+            state["router_reasoning"]  = "Financial fields staged — HITL confirmation needed"
             state["router_confidence"] = 1.0
             state["detected_intent"]   = "save_confirmation"
+            logger.info("⏳ Router → handle_save_confirmation (HITL)")
             return state
 
-        # 1b. Programmatic Mismatch Override
-        mismatches = state.get("memory_mismatches", {})
-        if mismatches:
-            logger.warning(f"⚠️  Router overriden by programmatic conflict engine: {len(mismatches)} mismatches")
-            state["next_handler"] = "handle_mismatch_confirmation"
-            state["router_reasoning"] = "Programmatic conflict detected during memory extraction"
+        # 2. Mismatch override
+        if state.get("memory_mismatches"):
+            state["next_handler"]      = "handle_mismatch_confirmation"
+            state["router_reasoning"]  = "Programmatic conflict detected"
             state["router_confidence"] = 1.0
-            state["detected_intent"] = "update_info (mismatch)"
+            state["detected_intent"]   = "update_info (mismatch)"
+            logger.info(f"⚠️  Router → handle_mismatch_confirmation ({len(state['memory_mismatches'])} conflicts)")
             return state
 
-        # 2. Structured LLM chain for Query vs General
+        # 3. LLM decision
         base_llm       = create_llm(temperature=0.3)
         structured_llm = base_llm.with_structured_output(RouterDecision)
-        chain          =  ROUTER_PROMPT | structured_llm
+        chain          = ROUTER_PROMPT | structured_llm
 
         decision: RouterDecision = await chain.ainvoke({
-            "user_input":           user_input,
-            "memory_context":       memory_context,
+            "user_input":          user_input,
+            "memory_context":      memory_ctx,
             "conversation_history": conv_history,
         })
 
-        state["next_handler"]       = decision.next_handler
-        state["router_reasoning"]   = decision.reasoning
-        state["router_confidence"]  = decision.confidence
-        
-        intent_map = {
-            "handle_query": "query_loan",
-            "handle_general": "general_chat"
-        }
-        state["detected_intent"]    = intent_map.get(decision.next_handler, decision.next_handler)
-        state["intent_confidence"]  = decision.confidence
-
-        logger.info(
-            f"🤖 Router → {decision.next_handler} "
-            f"(conf={decision.confidence:.2f}) | {decision.reasoning[:80]}"
-        )
+        intent_map = {"handle_query": "query_loan", "handle_general": "general_chat"}
+        state.update({
+            "next_handler":      decision.next_handler,
+            "router_reasoning":  decision.reasoning,
+            "router_confidence": decision.confidence,
+            "detected_intent":   intent_map.get(decision.next_handler, decision.next_handler),
+            "intent_confidence": decision.confidence,
+        })
+        logger.info(f"🤖 Router → {decision.next_handler} ({decision.confidence:.2f})")
         return state
 
     except Exception as e:
         logger.error(f"❌ Router failed: {e}", exc_info=True)
         state.update({
             "next_handler":      "handle_general",
-            "error":             f"Router error: {str(e)}",
-            "has_mismatch":      False,
-            "mismatched_fields": {},
+            "error":             f"Router error: {e}",
             "router_reasoning":  "Fallback due to error",
             "router_confidence": 0.0,
         })
@@ -327,18 +294,14 @@ async def router(state: SessionState) -> SessionState:
 
 # ============================================================================
 # NODE 4: END_SESSION
-# FIX #1 — move `messages` assignment BEFORE the loop that iterates over it
 # ============================================================================
 
 async def end_session(state: SessionState) -> SessionState:
     """
-    Persist session results to SQLite + ChromaDB.
-
-    Steps:
-    1. Append agent response to message history
-    2. Store ALL messages session-wise to ChromaDB
-    3. Create and store session summary to ChromaDB
-    4. Update token count
+    1. Append assistant response to message history.
+    2. Write a REAL LLM-generated summary to ChromaDB (only if ≥4 turns).
+       — No more fake template strings ("Session X | N turns | Last response:…")
+    3. Recount tokens.
     """
     try:
         customer_id    = state.get("customer_id")
@@ -349,9 +312,7 @@ async def end_session(state: SessionState) -> SessionState:
             state["error"] = "No customer_id — cannot persist"
             return state
 
-        # ----------------------------------------------------------------
-        # 1. Append agent response to message history
-        # ----------------------------------------------------------------
+        # 1. Append assistant turn
         if "messages" not in state or state["messages"] is None:
             state["messages"] = []
 
@@ -360,39 +321,51 @@ async def end_session(state: SessionState) -> SessionState:
             "content": agent_response,
             "timestamp": datetime.now().isoformat(),
         })
-
         messages: List[Dict[str, str]] = state["messages"]
 
-        # ----------------------------------------------------------------
-        # 2. Store session summary to ChromaDB (cross-session recall only)
-        #    Raw message turns are NOT stored — only memory-relevant contextual
-        #    info is written to ChromaDB (by handle_memory_update handler).
-        # ----------------------------------------------------------------
-        if len(messages) >= 2:
+        # 2. Write REAL LLM summary to ChromaDB — only when meaningful content exists
+        #    Threshold: ≥4 messages (2 user + 2 assistant turns minimum).
+        #    We generate a compact fact-dense summary, NOT a template string.
+        if len(messages) >= 4:
             try:
-                vs = VectorStore(persist_path=CHROMA_PATH)
-                summary_text = (
-                    f"Session {session_id} | {len(messages)} turns | "
-                    f"Last response: {agent_response[:300]}"
-                )
-                vs.add_session_summary(
-                    customer_id=customer_id,
-                    session_id=session_id,
-                    summary_text=summary_text,
-                )
-                logger.info("📄 Session summary stored to ChromaDB")
-            except Exception as e:
-                logger.warning(f"⚠️  Session summary failed: {e}")
+                # Only include user/assistant turns (skip system summary entries)
+                turns_text = "\n".join(
+                    f"{m.get('role','?').upper()}: {m.get('content','')}"
+                    for m in messages
+                    if m.get("role") in ("user", "assistant")
+                )[:1500]  # cap prompt length
 
-        # ----------------------------------------------------------------
-        # 4. Recount tokens after appending assistant turn
-        # ----------------------------------------------------------------
-        state["total_tokens"] = _count_tokens(messages)
+                summary_prompt = (
+                    "Summarize this loan advisor conversation in 2-3 sentences. "
+                    "Include only concrete facts: income figures, loan amounts, "
+                    "employment details, CIBIL score, decisions made, and open questions. "
+                    "Skip greetings and filler.\n\n" + turns_text
+                )
+
+                llm  = create_llm(temperature=0.2)
+                resp = await llm.ainvoke(summary_prompt)
+                summary_text = (
+                    resp.content if hasattr(resp, "content") else str(resp)
+                ).strip()
+
+                if summary_text:
+                    vs = VectorStore(persist_path=CHROMA_PATH)
+                    vs.add_session_summary(
+                        customer_id=customer_id,
+                        session_id=session_id,
+                        summary_text=summary_text,
+                    )
+                    logger.info(f"📄 Session summary → ChromaDB: {summary_text[:80]}…")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Session summary write failed (non-fatal): {e}")
+
+        # 3. Recount tokens
+        state["total_tokens"]     = _count_tokens(messages)
         state["session_end_time"] = datetime.now().isoformat()
 
         logger.info(
-            f"✅ end_session complete | tokens={state['total_tokens']} | "
-            f"msgs={len(messages)}"
+            f"✅ end_session | tokens={state['total_tokens']} | msgs={len(messages)}"
         )
         return state
 

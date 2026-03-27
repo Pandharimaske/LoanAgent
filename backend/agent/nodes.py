@@ -1,13 +1,7 @@
 """
-LangGraph Node Implementations — Orchestrator & Re-exports
+LangGraph Node re-exports.
 
-This module orchestrates node imports from specialized modules:
-- core_nodes: Infrastructure nodes (check_token_threshold, load_memory, router, end_session)
-- handlers: Action handlers (handle_memory_update, handle_mismatch_confirmation, handle_query, handle_general)
-- schemas: Pydantic models for structured outputs
-- helpers: LLM-based utility functions
-
-Provides backward compatibility for imports from this single module.
+Single import surface for graph.py — pulls from core_nodes and handlers.
 """
 
 import sys
@@ -16,12 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ============================================================================
-# RE-EXPORT SCHEMAS
-# ============================================================================
+# Schemas
 from agent.schemas import (
-    ConflictDetail,
-    ConflictExtractionResult,
     FieldClassification,
     FieldClassificationResult,
     ExtractedEntity,
@@ -30,17 +20,13 @@ from agent.schemas import (
     RouterDecision,
 )
 
-# ============================================================================
-# RE-EXPORT HELPERS
-# ============================================================================
+# Helpers
 from agent.helpers import (
     classify_fields_with_llm,
     format_conversation_history,
 )
 
-# ============================================================================
-# RE-EXPORT CORE NODES
-# ============================================================================
+# Core nodes
 from agent.core_nodes import (
     check_token_threshold,
     load_memory,
@@ -48,9 +34,7 @@ from agent.core_nodes import (
     end_session,
 )
 
-# ============================================================================
-# RE-EXPORT HANDLERS
-# ============================================================================
+# Handlers
 from agent.handlers import (
     extract_memory_node,
     handle_save_confirmation,
@@ -61,11 +45,8 @@ from agent.handlers import (
 
 logger = logging.getLogger(__name__)
 
-
 __all__ = [
     # Schemas
-    "ConflictDetail",
-    "ConflictExtractionResult",
     "FieldClassification",
     "FieldClassificationResult",
     "ExtractedEntity",
@@ -73,7 +54,6 @@ __all__ = [
     "SchemaFieldValidator",
     "RouterDecision",
     # Helpers
-    "extract_memory_node",
     "classify_fields_with_llm",
     "format_conversation_history",
     # Core nodes
@@ -82,6 +62,8 @@ __all__ = [
     "router",
     "end_session",
     # Handlers
+    "extract_memory_node",
+    "handle_save_confirmation",
     "handle_mismatch_confirmation",
     "handle_query",
     "handle_general",

@@ -2,14 +2,13 @@
 Pydantic schemas for structured LLM outputs and validation.
 
 Organized by concern:
-- Conflict Detection: ConflictDetail, ConflictExtractionResult
-- Field Classification: FieldClassification, FieldClassificationResult
-- Entity Extraction: ExtractedEntity, EntityExtractionResult
-- Schema Validation: SchemaFieldValidator
-- Routing: RouterDecision
+- Field Classification : FieldClassification, FieldClassificationResult
+- Entity Extraction    : ExtractedEntity, EntityExtractionResult
+- Schema Validation    : SchemaFieldValidator
+- Routing              : RouterDecision
 """
 
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, List
 from pydantic import BaseModel, Field
 
 # Ollama's JSON schema validator rejects `Any` (serialized as `{}` with no type).
@@ -18,77 +17,73 @@ ScalarValue = Union[str, float, int, bool, None]
 
 
 # ============================================================================
-# CONFLICT DETECTION SCHEMAS
-# ============================================================================
-
-class ConflictDetail(BaseModel):
-    """Details of a single conflicting field."""
-    field: str = Field(..., description="Field name that has conflict")
-    old_value: ScalarValue = Field(..., description="Previously confirmed value")
-    new_value: ScalarValue = Field(..., description="New value from customer")
-    confidence: float = Field(..., description="Confidence of conflict detection (0.0-1.0)")
-    explanation: str = Field(..., description="Why this conflict matters")
-
-
-class ConflictExtractionResult(BaseModel):
-    """LLM analysis result for conflict extraction."""
-    has_conflicts: bool = Field(..., description="Whether any conflicts were found")
-    conflicts: list[ConflictDetail] = Field(default_factory=list, description="List of conflicts detected")
-    summary: str = Field(..., description="Summary of analysis")
-
-
-# ============================================================================
 # FIELD CLASSIFICATION SCHEMAS
 # ============================================================================
 
 class FieldClassification(BaseModel):
-    """Classification of a single field/info."""
-    raw_value: str = Field(..., description="Original customer input")
-    field_type: Literal["SCHEMA_FIELD", "CONTEXTUAL_INFO"] = Field(..., description="SCHEMA_FIELD or CONTEXTUAL_INFO")
-    field_name: str = Field(..., description="Schema field name if SCHEMA_FIELD, else semantic description")
-    normalized_value: ScalarValue = Field(default=None, description="Normalized value for schema fields")
-    category: str = Field(..., description="Category (income, employment, etc.)")
-    is_correction: bool = Field(default=False, description="True if user is explicitly updating, correcting, or confirming a new value")
+    """Classification of a single piece of information from the user."""
+    raw_value: str = Field(..., description="Original customer input text")
+    field_type: Literal["SCHEMA_FIELD", "CONTEXTUAL_INFO"] = Field(
+        ..., description="SCHEMA_FIELD if it maps to a DB column, CONTEXTUAL_INFO otherwise"
+    )
+    field_name: str = Field(
+        ..., description="Exact DB column name if SCHEMA_FIELD, else a short semantic label"
+    )
+    normalized_value: ScalarValue = Field(
+        default=None, description="Cleaned/coerced value ready for DB storage"
+    )
+    category: str = Field(..., description="Topic group: income | employment | personal | loan | other")
+    is_correction: bool = Field(
+        default=False,
+        description=(
+            "True ONLY when the user is explicitly correcting or updating a previously "
+            "stated value (e.g. 'actually my income is 60k, not 50k'). False for first-time statements."
+        ),
+    )
 
 
 class FieldClassificationResult(BaseModel):
-    """LLM field classification result."""
-    classifications: list[FieldClassification] = Field(default_factory=list, description="Field classifications")
-    summary: str = Field(..., description="Summary of classification")
+    """Full LLM response for field classification."""
+    classifications: List[FieldClassification] = Field(
+        default_factory=list, description="One entry per extracted piece of information"
+    )
+    summary: str = Field(..., description="One-line summary of what was extracted")
 
 
 # ============================================================================
-# ENTITY EXTRACTION SCHEMAS
+# ENTITY EXTRACTION SCHEMAS  (used by entity extraction prompt — legacy)
 # ============================================================================
 
 class ExtractedEntity(BaseModel):
     """Single extracted entity from customer input."""
     raw_value: str = Field(..., description="Exact text from customer")
     normalized_value: ScalarValue = Field(..., description="Cleaned/processed value")
-    value_type: str = Field(..., description="Data type (string, number, date, etc.)")
-    category: str = Field(..., description="income | employment | personal | communication | concern | intent | other")
-    storage_target: str = Field(..., description="SQLite or ChromaDB")
-    confidence: float = Field(..., description="Confidence 0.0-1.0")
+    value_type: str = Field(..., description="Data type: string | number | date | boolean")
+    category: str = Field(
+        ...,
+        description="income | employment | personal | communication | concern | intent | other",
+    )
+    storage_target: str = Field(..., description="SQLite | ChromaDB")
+    confidence: float = Field(..., description="Confidence 0.0–1.0")
 
 
 class EntityExtractionResult(BaseModel):
     """LLM entity extraction result."""
-    entities: list[ExtractedEntity] = Field(default_factory=list, description="Extracted entities")
+    entities: List[ExtractedEntity] = Field(default_factory=list)
     summary: str = Field(..., description="Summary of extraction")
 
 
 # ============================================================================
-# SCHEMA FIELD VALIDATION
+# SCHEMA FIELD VALIDATION  (Pydantic-level range checks)
 # ============================================================================
 
 class SchemaFieldValidator(BaseModel):
-    """Pydantic validator for all schema fields with built-in validation rules."""
-    monthly_income: Optional[float] = Field(None, ge=0, le=10000000, description="Monthly income in range [0, 10M]")
-    cibil_score: Optional[int] = Field(None, ge=300, le=900, description="CIBIL score in range [300, 900]")
-    total_work_experience_years: Optional[float] = Field(None, ge=0, le=60, description="Years of experience [0, 60]")
-    number_of_active_loans: Optional[int] = Field(None, ge=0, le=50, description="Active loans count [0, 50]")
-    loan_amount: Optional[float] = Field(None, ge=0, le=100000000, description="Loan amount in range [0, 100M]")
-    
+    """Range-validated schema fields — used for pre-write sanity checks."""
+    monthly_income: Optional[float] = Field(None, ge=0, le=10_000_000)
+    cibil_score: Optional[int] = Field(None, ge=300, le=900)
+    number_of_active_loans: Optional[int] = Field(None, ge=0, le=50)
+    requested_loan_amount: Optional[float] = Field(None, ge=0, le=100_000_000)
+
     class Config:
         validate_assignment = True
 
@@ -98,37 +93,36 @@ class SchemaFieldValidator(BaseModel):
 # ============================================================================
 
 class RouterDecision(BaseModel):
-    """Structured routing decision from LLM analysis.
-    
-    The routing decision itself indicates the state:
-    - If next_handler == "handle_mismatch_confirmation" → has mismatch (conflicts detected)
-    - If next_handler == "handle_memory_update" → new info only (no conflicts)
-    - If next_handler == "handle_query" → user asking questions
-    - If next_handler == "handle_general" → general conversation
     """
+    Structured routing decision produced by the LLM router.
+
+    IMPORTANT — reduced option set:
+    Mismatch detection and HITL save-confirmation are handled PROGRAMMATICALLY
+    by extract_memory_node before the LLM router runs.  The LLM only ever needs
+    to decide between two response modes:
+
+      • handle_query   — user is asking a question that needs an answer
+      • handle_general — greeting, statement, acknowledgment, small talk
+    """
+
     next_handler: Literal[
-        "handle_mismatch_confirmation",
-        "handle_memory_update",
         "handle_query",
-        "handle_general"
+        "handle_general",
     ] = Field(
         ...,
-        description="Next handler to invoke based on detected intent/mismatch"
+        description=(
+            "handle_query  → user asked a question requiring an answer; "
+            "handle_general → greeting / statement / small-talk / acknowledgment"
+        ),
     )
-    reasoning: str = Field(
-        ...,
-        description="Why this handler was chosen and what was detected"
-    )
-    confidence: float = Field(
-        ...,
-        description="Confidence score 0.0-1.0"
-    )
-    
+    reasoning: str = Field(..., description="One-line explanation of the routing decision")
+    confidence: float = Field(..., description="Confidence score 0.0–1.0")
+
     class Config:
         json_schema_extra = {
             "example": {
-                "next_handler": "handle_mismatch_confirmation",
-                "reasoning": "User mentioned income change. Previous: 50000, Now: 75000. Routing to mismatch handler for polite verification.",
-                "confidence": 0.92
+                "next_handler": "handle_query",
+                "reasoning": "User asked 'Am I eligible for a 25L loan?' — needs a factual answer.",
+                "confidence": 0.95,
             }
         }
