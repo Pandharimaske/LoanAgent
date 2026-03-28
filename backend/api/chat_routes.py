@@ -212,19 +212,35 @@ async def send_message(request: ChatRequest):
         raw_input       = request.user_input
         translate_llm   = create_llm(temperature=0.1)
 
-        # Detect language from raw input (always per-turn in AUTO mode)
-        if session_lang in ("auto", "AUTO", None, ""):
-            detected_lang = detect_language(raw_input)
-        else:
-            # User has locked the language via the toggle
+        # ── Determine effective language ────────────────────────────────────
+        # preferred_language: sticky — once user writes in Hindi/Hinglish we
+        # remember it even for short follow-up messages like "50000" or "haan"
+        preferred_lang = session_data.get("preferred_language", None)
+
+        if session_lang not in ("auto", "AUTO", None, ""):
+            # User has LOCKED the language via the toggle → always use that
             detected_lang = session_lang
+        else:
+            # AUTO mode: detect from this message
+            message_lang = detect_language(raw_input)
+
+            if message_lang != "en":
+                # Clearly non-English → update sticky preference
+                detected_lang = message_lang
+                SESSIONS[session_id]["preferred_language"] = message_lang
+            elif preferred_lang and preferred_lang != "en":
+                # Short / English-looking message (e.g. "50000", "haan", "yes")
+                # → keep the user's sticky preferred language
+                detected_lang = preferred_lang
+            else:
+                detected_lang = "en"
 
         # Translate to English if needed (pipeline always runs in English)
         english_input = await translate_to_english(raw_input, detected_lang, translate_llm)
 
-        # Persist detected language into session for this turn
+        # Persist effective language for this turn
         SESSIONS[session_id]["language"] = detected_lang
-        logger.info(f"🌐 Language: '{detected_lang}' | translated={detected_lang != 'en'}")
+        logger.info(f"🌐 Language: '{detected_lang}' (sticky={preferred_lang}) | translated={detected_lang != 'en'}")
 
         # ------------------------------------------------------------------
         # FIX #5 — carry messages and token count forward from session store
@@ -313,17 +329,33 @@ async def send_message(request: ChatRequest):
             logger.warning(f"⚠️  Could not persist messages to DB: {db_err}")
 
         # ──────────────────────────────────────────────────────────────────
-        # TRANSLATE-OUT: translate English response → user's language
+        # TRANSLATE-OUT: translate English response + options → user's language
         # ──────────────────────────────────────────────────────────────────
         english_response = final_state.get(
             "agent_response", "I encountered an issue processing your request."
         )
+        english_options: List[str] = final_state.get("response_options") or []
+
         if detected_lang != "en":
+            # Translate main response
             final_response_text = await translate_to_user_language(
                 english_response, detected_lang, translate_llm
             )
+            # Translate quick-reply chip labels
+            if english_options:
+                options_blob = "\n".join(english_options)
+                translated_blob = await translate_to_user_language(
+                    options_blob, detected_lang, translate_llm
+                )
+                final_options = [line.strip() for line in translated_blob.splitlines() if line.strip()]
+                # Fallback: keep English if count mismatch (LLM added/removed lines)
+                if len(final_options) != len(english_options):
+                    final_options = english_options
+            else:
+                final_options = english_options
         else:
             final_response_text = english_response
+            final_options       = english_options
 
         logger.info(
             f"✅ [{session_id[:8]}] done | "
@@ -336,10 +368,10 @@ async def send_message(request: ChatRequest):
             success=not bool(final_state.get("error")),
             session_id=session_id,
             customer_id=request.customer_id,
-            user_input=raw_input,           # ← return original input, not translated
-            agent_response=final_response_text,  # ← translated response
+            user_input=raw_input,
+            agent_response=final_response_text,
             response_type=final_state.get("response_type", "text"),
-            response_options=final_state.get("response_options") or [],
+            response_options=final_options,
             pending_fields=final_state.get("pending_fields") or None,
             detected_intent=final_state.get("detected_intent"),
             clarification_question=final_state.get("clarification_question"),
@@ -400,24 +432,34 @@ class ConfirmSaveResponse(BaseModel):
 async def confirm_save(request: ConfirmSaveRequest):
     """
     Human-in-the-loop memory save endpoint.
-
-    When the agent extracts financial facts and puts them in pending_fields,
-    the frontend renders a SaveConfirmationCard. The user confirms, edits,
-    or discards. This endpoint executes the final write (or discard).
+    Translates response into the session's preferred language.
     """
     try:
+        # Look up session to get preferred language
+        session = SESSIONS.get(request.session_id)
+        session_lang = (
+            (session or {}).get("preferred_language")
+            or (session or {}).get("language")
+            or "en"
+        )
+
+        async def _translate(text: str) -> str:
+            """Translate response to user's language (non-fatal)."""
+            if session_lang == "en":
+                return text
+            try:
+                llm = create_llm(temperature=0.1)
+                return await translate_to_user_language(text, session_lang, llm)
+            except Exception:
+                return text
+
         if not request.approved:
             logger.info(f"🚫 User discarded pending fields for {request.customer_id}")
-            return ConfirmSaveResponse(
-                success=True,
-                status="discarded",
-                response="No problem! I won't save those details.",
-            )
+            msg = await _translate("No problem! I won't save those details.")
+            return ConfirmSaveResponse(success=True, status="discarded", response=msg)
 
         # Retrieve pending_fields from in-memory session
-        session = SESSIONS.get(request.session_id)
         pending: Dict[str, Any] = {}
-
         if session:
             pending = session.get("pending_fields", {})
 
@@ -430,14 +472,10 @@ async def confirm_save(request: ConfirmSaveRequest):
                 f"confirm-save: no pending_fields found for session {request.session_id}. "
                 f"SESSIONS keys: {list(SESSIONS.keys())[:5]}"
             )
-            return ConfirmSaveResponse(
-                success=True,
-                status="discarded",
-                response="Nothing to save — the fields may have already been cleared.",
-            )
+            msg = await _translate("Nothing to save — the fields may have already been cleared.")
+            return ConfirmSaveResponse(success=True, status="discarded", response=msg)
 
         # Resolve the real customer_id from the session store
-        # (frontend may send 'Not assigned' or the session_id as a fallback)
         customer_id = request.customer_id
         if session and session.get("customer_id"):
             customer_id = session["customer_id"]
@@ -455,11 +493,16 @@ async def confirm_save(request: ConfirmSaveRequest):
         fields_written = list(pending.keys())
         logger.info(f"✅ Confirmed save for {customer_id}: {fields_written}")
 
+        english_msg = (
+            f"Got it! I've saved your updated details "
+            f"({', '.join(fields_written).replace('_', ' ')})."
+        )
+        msg = await _translate(english_msg)
         return ConfirmSaveResponse(
             success=True,
             status="saved",
             fields_written=fields_written,
-            response=f"Got it! I've saved your updated details ({', '.join(fields_written).replace('_', ' ')}).",
+            response=msg,
         )
 
     except Exception as e:
