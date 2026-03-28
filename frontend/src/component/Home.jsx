@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import ParticleBackground from "./ParticleBackground";
+import LoanCalculator from "./loanCalculator";
 
 export default function Home() {
   const navigate = useNavigate();
@@ -215,6 +216,7 @@ export default function Home() {
           })}
         </motion.div>
       </section>
+      <LoanCalculator/>
     </div>
   );
 }
