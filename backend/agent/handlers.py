@@ -85,11 +85,19 @@ def _normalize_date(value: Any) -> Optional[str]:
 # ============================================================================
 
 # Financial fields that need HITL confirmation before writing to SQLite
+# Only field names that exist in VALID_COLUMNS (the SQLite schema) should appear here.
+# Phantom names like 'annual_income', 'net_monthly_income', 'requested_loan_tenure',
+# 'existing_loan_amount' are not DB columns — they were silently rejected by
+# batch_update_fields and caused HITL confirmations that never actually saved anything.
 FINANCIAL_FIELDS: frozenset = frozenset({
-    "monthly_income", "annual_income", "net_monthly_income",
-    "cibil_score", "requested_loan_amount", "requested_loan_type",
-    "requested_loan_tenure", "existing_loan_amount",
-    "total_existing_emi_monthly", "number_of_active_loans", "coapplicant_income",
+    "monthly_income",
+    "cibil_score",
+    "requested_loan_amount",
+    "requested_loan_type",
+    "requested_tenure_months",
+    "total_existing_emi_monthly",
+    "number_of_active_loans",
+    "coapplicant_income",
 })
 
 _FIELD_RULES: Dict[str, Tuple[type, Optional[str]]] = {
@@ -167,6 +175,10 @@ async def extract_memory_node(state: SessionState) -> SessionState:
 
         if not user_input or not customer_id:
             return state
+
+        # Reset transient per-turn state flags so they don't bleed across turns
+        state["memory_mismatches"] = {}
+        state["pending_fields"]    = {}
 
         messages     = state.get("messages") or []
         conv_history = format_conversation_history(messages[:-1]) if messages else "No prior conversation"
@@ -272,15 +284,20 @@ async def extract_memory_node(state: SessionState) -> SessionState:
         # 5. Refresh memory_prompt_block if anything changed
         if wrote_schema or wrote_chroma:
             try:
-                with MemoryDatabase(db_path=SQLITE_PATH) as db:
-                    retriever = MemoryRetriever(db)
+                retriever = MemoryRetriever(
+                    db=MemoryDatabase(db_path=SQLITE_PATH),
+                    vector_store=VectorStore(persist_path=CHROMA_PATH),
+                )
+                try:
                     ctx = retriever.build_context(
                         customer_id=customer_id,
                         current_turn=user_input,
                         n_chunks=3,
                     )
-                    state["customer_facts"]      = db.get_all_facts_grouped(customer_id)
+                    state["customer_facts"]      = retriever.db.get_all_facts_grouped(customer_id)
                     state["memory_prompt_block"] = ctx["prompt_block"]
+                finally:
+                    retriever.close()
             except Exception as e:
                 logger.error(f"Failed to refresh memory block: {e}")
 
@@ -382,7 +399,12 @@ async def handle_save_confirmation(state: SessionState) -> SessionState:
             ),
             "response_type":    "save_confirmation",
             "response_options": ["✅ Save", "✏️ Edit", "❌ Don't Save"],
+            # Clear mismatches so the next turn starts clean
+            "memory_mismatches": {},
         })
+        # NOTE: pending_fields intentionally kept in state so confirm-save endpoint
+        # can read it via the SESSIONS dict (written back in send_message).
+        # It gets cleared in confirm-save after the user responds.
         logger.info(f"📋 Save confirmation for {len(pending)} field(s)")
         return state
 

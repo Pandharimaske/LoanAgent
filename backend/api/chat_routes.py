@@ -256,8 +256,10 @@ async def send_message(request: ChatRequest):
         updated_messages = final_state.get("messages", prior_messages)
         updated_tokens   = final_state.get("total_tokens", 0)
 
-        SESSIONS[session_id]["messages"]     = updated_messages
-        SESSIONS[session_id]["total_tokens"] = updated_tokens
+        SESSIONS[session_id]["messages"]      = updated_messages
+        SESSIONS[session_id]["total_tokens"]  = updated_tokens
+        # Persist pending_fields so /confirm-save can read them
+        SESSIONS[session_id]["pending_fields"] = final_state.get("pending_fields") or {}
 
         # Persist to DB (non-fatal if it fails)
         try:
@@ -368,24 +370,34 @@ async def confirm_save(request: ConfirmSaveRequest):
             pending.update(request.edited_fields)
 
         if not pending:
+            logger.warning(
+                f"confirm-save: no pending_fields found for session {request.session_id}. "
+                f"SESSIONS keys: {list(SESSIONS.keys())[:5]}"
+            )
             return ConfirmSaveResponse(
                 success=True,
                 status="discarded",
                 response="Nothing to save — the fields may have already been cleared.",
             )
 
+        # Resolve the real customer_id from the session store
+        # (frontend may send 'Not assigned' or the session_id as a fallback)
+        customer_id = request.customer_id
+        if session and session.get("customer_id"):
+            customer_id = session["customer_id"]
+
         # Write to SQLite
         from memory.sqlite_store import MemoryDatabase
         with MemoryDatabase(db_path=SQLITE_PATH) as db:
             db.init_schema()
-            db.batch_update_fields(customer_id=request.customer_id, fields=pending)
+            db.batch_update_fields(customer_id=customer_id, fields=pending)
 
         # Clear pending_fields from session
         if session:
             session["pending_fields"] = {}
 
         fields_written = list(pending.keys())
-        logger.info(f"✅ Confirmed save for {request.customer_id}: {fields_written}")
+        logger.info(f"✅ Confirmed save for {customer_id}: {fields_written}")
 
         return ConfirmSaveResponse(
             success=True,

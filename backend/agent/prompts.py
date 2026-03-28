@@ -207,13 +207,13 @@ RULES:
 """
 
 FIELD_CLASSIFICATION_USER_PROMPT = """CUSTOMER PROFILE (already known — do NOT re-extract these):
-{{memory_context}}
+{memory_context}
 
 RECENT CONVERSATION:
-{{conversation_history}}
+{conversation_history}
 
 CUSTOMER STATEMENT:
-"{{user_input}}"
+"{user_input}"
 
 Classify every new piece of information. For each item provide:
   raw_value       – exact words from the customer

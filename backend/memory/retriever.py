@@ -42,7 +42,8 @@ class MemoryRetriever:
     ):
         self.db = db or MemoryDatabase()
         self.vector_store = vector_store or VectorStore()
-        self.db.connect()
+        if not self.db.connection:
+            self.db.connect()
         self.db.init_schema()
 
     # ------------------------------------------------------------------ public

@@ -99,7 +99,11 @@ export default function DashboardPage() {
 
   const handleConfirmSave = async (approved, editedFields = null) => {
     const sessionId = localStorage.getItem("sessionId");
-    const customerId = userData?.customer_id;
+    // customer_id may be stored separately; fall back to userData
+    const customerId =
+      localStorage.getItem("customer_id") ||
+      userData?.customer_id ||
+      sessionId; // last-resort: backend will derive it from the session
 
     // Optimistic UI — mark last save_confirmation message as resolved
     setChat(prev => prev.map(m => m.response_type === "save_confirmation" ? { ...m, response_type: "resolved" } : m));
@@ -114,6 +118,7 @@ export default function DashboardPage() {
       setChat(prev => [...prev, { id: messageIdRef.current++, role: "agent", text: confirmMsg, response_type: "text", options: ["💰 Check loan eligibility", "📋 View my profile", "❓ Ask another question"] }]);
       sessionStorage.removeItem("pending_fields");
     } catch (err) {
+      console.error("confirm-save error:", err.response?.data || err.message);
       setChat(prev => [...prev, { id: messageIdRef.current++, role: "agent", text: "⚠️ Failed to save details. Please try again.", response_type: "text" }]);
     }
   };
