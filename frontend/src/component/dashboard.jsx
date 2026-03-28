@@ -6,7 +6,7 @@ import axios from "axios";
 const BASE_URL = import.meta.env.VITE_BASE_URL || "http://localhost:8000";
 
 const dummyChat = [
-  { id: 1, role: "agent", text: "Welcome to BrainBack Secure Banking. How can I help you today?", response_type: "options", options: ["📋 Check loan eligibility", "💰 View loan options", "📁 Update my profile", "❓ Ask a question"] },
+  { id: 1, role: "agent", text: "Welcome to BrainBack Secure Banking. How can I help you today?", response_type: "options", options: ["📋 Check loan eligibility", "💰 View loan options", "📁 Update my profile", "❓ Ask a question"], options_consumed: false },
 ];
 
 export default function DashboardPage() {
@@ -71,25 +71,32 @@ export default function DashboardPage() {
       const options = data.response_options || [];
       const pendingFields = data.pending_fields || null;
 
+      console.log("[Chat] response_type:", responseType, "| pending_fields:", pendingFields);
+
       // Store pending_fields in session storage for /confirm-save call
       if (pendingFields && Object.keys(pendingFields).length > 0) {
         sessionStorage.setItem("pending_fields", JSON.stringify(pendingFields));
       }
 
       const agentMessageId = messageIdRef.current++;
-      setChat(prev => [...prev, {
-        id: agentMessageId,
-        role: "agent",
-        text: agentText,
-        response_type: responseType,
-        options: options,
-        pending_fields: pendingFields,
-      }]);
+      // Mark all previous agent messages chip options as consumed (freeze them)
+      setChat(prev => [
+        ...prev.map(m => m.role === "agent" && m.options ? { ...m, options_consumed: true } : m),
+        {
+          id: agentMessageId,
+          role: "agent",
+          text: agentText,
+          response_type: responseType,
+          options: options,
+          options_consumed: false,
+          pending_fields: pendingFields,
+        }
+      ]);
 
       if (data.error) setError(data.error);
     } catch (err) {
       const errorText = err.response?.data?.detail || "Connection error. Please try again.";
-      setChat(prev => [...prev, { id: messageIdRef.current++, role: "agent", text: "⚠️ " + errorText }]);
+      setChat(prev => [...prev, { id: messageIdRef.current++, role: "agent", text: "⚠️ " + errorText, options_consumed: true }]);
       setError(errorText);
     } finally {
       setSending(false);
@@ -203,7 +210,13 @@ export default function DashboardPage() {
             )}
 
             {/* Messages */}
-            {chat.map((msg) => (
+            {chat.map((msg, idx) => {
+              const isLastAgentMsg =
+                msg.role === "agent" &&
+                [...chat].reverse().findIndex(m => m.role === "agent") ===
+                  chat.length - 1 - idx;
+
+              return (
               <div key={msg.id}>
                 {/* Message bubble */}
                 <div style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", alignItems: "flex-end", gap: "10px", marginBottom: "4px" }}>
@@ -221,31 +234,39 @@ export default function DashboardPage() {
                   {msg.role === "user" && <div style={styles.userBubbleAvatar}><User size={16} color="#fff" /></div>}
                 </div>
 
-                {/* Save Confirmation Card */}
-                {msg.role === "agent" && msg.response_type === "save_confirmation" && msg.pending_fields && (
+                {/* Save Confirmation Card — only on last agent message with pending_fields */}
+                {isLastAgentMsg && msg.response_type === "save_confirmation" && msg.pending_fields && (
                   <SaveConfirmationCard
                     pendingFields={msg.pending_fields}
                     onConfirm={handleConfirmSave}
                   />
                 )}
 
-                {/* Mismatch Card */}
-                {msg.role === "agent" && msg.response_type === "mismatch_confirmation" && (
+                {/* Mismatch Card — only on last agent message */}
+                {isLastAgentMsg && msg.response_type === "mismatch_confirmation" && (
                   <MismatchCard onConfirm={(useNew) => {
                     handleSend(useNew ? "✅ Yes, use the new value" : "❌ No, keep my old value");
                     setChat(prev => prev.map(m => m.id === msg.id ? { ...m, response_type: "resolved" } : m));
                   }} />
                 )}
 
-                {/* Quick Reply Chips */}
-                {msg.role === "agent" && msg.response_type === "text" && msg.options && msg.options.length > 0 && (
-                  <QuickReplyChips options={msg.options} onSelect={(opt) => handleSend(opt)} />
-                )}
-                {msg.role === "agent" && msg.response_type === "options" && msg.options && msg.options.length > 0 && (
-                  <QuickReplyChips options={msg.options} onSelect={(opt) => handleSend(opt)} />
+                {/* Quick Reply Chips — ONLY on the last agent message, and only if not consumed */}
+                {isLastAgentMsg &&
+                  !msg.options_consumed &&
+                  (msg.response_type === "text" || msg.response_type === "options") &&
+                  msg.options && msg.options.length > 0 && (
+                  <QuickReplyChips
+                    options={msg.options}
+                    onSelect={(opt) => {
+                      // Mark this message's chips as consumed before sending
+                      setChat(prev => prev.map(m => m.id === msg.id ? { ...m, options_consumed: true } : m));
+                      handleSend(opt);
+                    }}
+                  />
                 )}
               </div>
-            ))}
+            );
+            })}
 
             {/* Typing indicator */}
             {sending && (
