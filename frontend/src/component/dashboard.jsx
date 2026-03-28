@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [langMode, setLangMode] = useState("auto"); // "auto" | "en" | "hi"
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
   const messageIdRef = useRef(2);
@@ -62,7 +63,7 @@ export default function DashboardPage() {
       const response = await axios.post(`${BASE_URL}/session/message`, {
         session_id: sessionId || "demo_session",
         user_input: msgText,
-        language: "en",
+        language: langMode,
       });
 
       const data = response.data;
@@ -194,6 +195,23 @@ export default function DashboardPage() {
               <p style={styles.agentStatus}><span style={styles.statusDot} />Online · Powered by BrainBack Intelligence</p>
             </div>
             <div style={styles.msgCount}><Zap size={13} color="#f59e0b" /><span style={styles.msgCountTxt}>{chat.length} messages</span></div>
+
+            {/* ── Language Toggle ── */}
+            <div style={langToggleStyles.wrap}>
+              {[["auto", "AUTO"], ["en", "EN"], ["hi", "हिं"]].map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setLangMode(val)}
+                  style={{
+                    ...langToggleStyles.btn,
+                    ...(langMode === val ? langToggleStyles.active : langToggleStyles.inactive),
+                  }}
+                  title={val === "auto" ? "Auto-detect language" : val === "en" ? "English" : "Hindi / Hinglish"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Messages area */}
@@ -204,8 +222,20 @@ export default function DashboardPage() {
               <div style={styles.heroWrap}>
                 <div style={styles.heroGlow} />
                 <div style={styles.heroIcon}><ShieldCheck size={26} color="#fff" /></div>
-                <h2 style={styles.heroTitle}>How can I help you today?</h2>
-                <p style={styles.heroSubtitle}>Ask me anything about loans, eligibility, rates, or your account.</p>
+                <h2 style={styles.heroTitle}>{
+                  langMode === "hi"
+                    ? "आज मैं आपकी कैसे मदद कर सकता हूँ?"
+                    : langMode === "en"
+                    ? "How can I help you today?"
+                    : "How can I help you? / Main aapki kaise help kar sakta hun?"
+                }</h2>
+                <p style={styles.heroSubtitle}>{
+                  langMode === "hi"
+                    ? "लोन, पात्रता, दरें या अपने खाते के बारे में कुछ भी पूछें।"
+                    : langMode === "en"
+                    ? "Ask me anything about loans, eligibility, rates, or your account."
+                    : "Loan, eligibility, rates ke baare mein kuch bhi poochhein."
+                }</p>
               </div>
             )}
 
@@ -283,7 +313,10 @@ export default function DashboardPage() {
           <div style={styles.inputArea}>
             <div style={styles.inputRow} onFocusCapture={e => Object.assign(e.currentTarget.style, styles.inputRowFocused)} onBlurCapture={e => Object.assign(e.currentTarget.style, styles.inputRowBase)}>
               <input ref={inputRef} id="chat-input" type="text"
-                placeholder={sending ? "Agent is thinking…" : "Type a message or ask a question…"}
+                placeholder={sending
+                  ? (langMode === "hi" ? "एजेंट सोच रहा है…" : langMode === "en" ? "Agent is thinking…" : "Agent soch raha hai…")
+                  : (langMode === "hi" ? "अपना सवाल यहाँ लिखें…" : langMode === "en" ? "Type a message or ask a question…" : "Type karo ya Hindi mein poochho…")
+                }
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !sending && handleSend()}
@@ -297,7 +330,11 @@ export default function DashboardPage() {
                 {sending ? <Loader2 size={20} color="#94a3b8" style={{ animation: "spin 0.7s linear infinite" }} /> : <Send size={20} color="#fff" />}
               </button>
             </div>
-            <p style={styles.inputHint}>Press <kbd style={styles.kbd}>Enter</kbd> to send · Powered by BrainBack Intelligence</p>
+            <p style={styles.inputHint}>Press <kbd style={styles.kbd}>Enter</kbd> to send
+              {langMode === "auto" && " · Auto-detecting language"}
+              {langMode === "hi" && " · Hindi / Hinglish mode"}
+              {langMode === "en" && " · English mode"}
+            </p>
           </div>
         </div>
       </div>
@@ -506,4 +543,12 @@ const styles = {
   sendBtn: { width: "44px", height: "44px", borderRadius: "12px", flexShrink: 0, border: "none", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform 0.15s, box-shadow 0.2s, background 0.2s" },
   inputHint: { margin: "10px 0 0", fontSize: "11px", color: "#1e293b", textAlign: "center" },
   kbd: { background: "rgba(255,255,255,0.07)", padding: "1px 6px", borderRadius: "4px", border: "1px solid rgba(255,255,255,0.1)", color: "#475569", fontSize: "10px" },
+};
+
+/* ─── Language Toggle Styles ─── */
+const langToggleStyles = {
+  wrap: { display: "flex", gap: "4px", marginLeft: "auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", padding: "3px" },
+  btn:  { padding: "4px 10px", borderRadius: "7px", fontSize: "11px", fontWeight: 600, cursor: "pointer", border: "none", fontFamily: "'Inter', sans-serif", transition: "all 0.18s" },
+  active:   { background: "linear-gradient(135deg, #3b82f6, #06b6d4)", color: "#fff", boxShadow: "0 2px 8px rgba(59,130,246,0.4)" },
+  inactive: { background: "transparent", color: "#475569" },
 };

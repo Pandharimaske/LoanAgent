@@ -17,6 +17,8 @@ from pydantic import BaseModel
 # FIX #8 — use singleton accessor instead of build_graph()
 from agent.graph import get_graph
 from agent.state import SessionState
+from agent.language import detect_language, translate_to_english, translate_to_user_language
+from agent.helpers import create_llm
 from auth.user_store import UserDatabase
 from config import SQLITE_PATH
 
@@ -99,7 +101,7 @@ def _count_tokens_approx(messages: List[Dict[str, Any]]) -> int:
     return sum(len(m.get("content", "") or "") // 4 for m in messages)
 
 
-def _create_session(customer_id: str, language: str = "en", session_id: str | None = None) -> str:
+def _create_session(customer_id: str, language: str = "auto", session_id: str | None = None) -> str:
     """
     Create an in-memory session entry, seeding message history from DB if
     an existing session_id is provided (e.g. user resuming after server restart).
@@ -160,7 +162,7 @@ def _create_session(customer_id: str, language: str = "en", session_id: str | No
 async def start_session(request: SessionStartRequest):
     """Create a new chat session and return its ID."""
     try:
-        session_id = _create_session(request.customer_id, request.language or "en")
+        session_id = _create_session(request.customer_id, request.language or "auto")
         return SessionStartResponse(
             success=True,
             session_id=session_id,
@@ -194,14 +196,35 @@ async def send_message(request: ChatRequest):
         elif session_id not in SESSIONS:
             session_id = _create_session(
                 request.customer_id,
-                request.language or "en",
+                request.language or "auto",
                 session_id=session_id,   # ← seed from DB
             )
 
         session_data = SESSIONS[session_id]
-        language = session_data.get("language", request.language or "en")
+        # Language: use session's stored lang, or override from this request
+        session_lang = session_data.get("language", "auto")
 
         logger.info(f"📨 [{session_id[:8]}] '{request.user_input[:60]}…'")
+
+        # ──────────────────────────────────────────────────────────────────
+        # TRANSLATE-IN: detect language & translate user input → English
+        # ──────────────────────────────────────────────────────────────────
+        raw_input       = request.user_input
+        translate_llm   = create_llm(temperature=0.1)
+
+        # Detect language from raw input (always per-turn in AUTO mode)
+        if session_lang in ("auto", "AUTO", None, ""):
+            detected_lang = detect_language(raw_input)
+        else:
+            # User has locked the language via the toggle
+            detected_lang = session_lang
+
+        # Translate to English if needed (pipeline always runs in English)
+        english_input = await translate_to_english(raw_input, detected_lang, translate_llm)
+
+        # Persist detected language into session for this turn
+        SESSIONS[session_id]["language"] = detected_lang
+        logger.info(f"🌐 Language: '{detected_lang}' | translated={detected_lang != 'en'}")
 
         # ------------------------------------------------------------------
         # FIX #5 — carry messages and token count forward from session store
@@ -217,9 +240,9 @@ async def send_message(request: ChatRequest):
             "session_id":  session_id,
             "customer_id": request.customer_id,
 
-            # Input
-            "user_input": request.user_input,
-            "language":   language,
+            # Input — English (translated from user's original language)
+            "user_input": english_input,
+            "language":   detected_lang,
 
             # Carry forward prior messages
             "messages": prior_messages,
@@ -280,7 +303,6 @@ async def send_message(request: ChatRequest):
 
         SESSIONS[session_id]["messages"]      = updated_messages
         SESSIONS[session_id]["total_tokens"]  = updated_tokens
-        # Persist pending_fields so /confirm-save can read them
         SESSIONS[session_id]["pending_fields"] = final_state.get("pending_fields") or {}
 
         # Persist to DB (non-fatal if it fails)
@@ -290,8 +312,22 @@ async def send_message(request: ChatRequest):
         except Exception as db_err:
             logger.warning(f"⚠️  Could not persist messages to DB: {db_err}")
 
+        # ──────────────────────────────────────────────────────────────────
+        # TRANSLATE-OUT: translate English response → user's language
+        # ──────────────────────────────────────────────────────────────────
+        english_response = final_state.get(
+            "agent_response", "I encountered an issue processing your request."
+        )
+        if detected_lang != "en":
+            final_response_text = await translate_to_user_language(
+                english_response, detected_lang, translate_llm
+            )
+        else:
+            final_response_text = english_response
+
         logger.info(
             f"✅ [{session_id[:8]}] done | "
+            f"lang={detected_lang} | "
             f"tokens={updated_tokens} | "
             f"msgs={len(updated_messages)}"
         )
@@ -300,10 +336,8 @@ async def send_message(request: ChatRequest):
             success=not bool(final_state.get("error")),
             session_id=session_id,
             customer_id=request.customer_id,
-            user_input=request.user_input,
-            agent_response=final_state.get(
-                "agent_response", "I encountered an issue processing your request."
-            ),
+            user_input=raw_input,           # ← return original input, not translated
+            agent_response=final_response_text,  # ← translated response
             response_type=final_state.get("response_type", "text"),
             response_options=final_state.get("response_options") or [],
             pending_fields=final_state.get("pending_fields") or None,
