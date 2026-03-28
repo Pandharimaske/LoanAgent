@@ -17,7 +17,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [langMode, setLangMode] = useState("auto"); // "auto" | "en" | "hi"
+  const [langMode, setLangMode] = useState("auto"); 
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
   const messageIdRef = useRef(2);
@@ -80,7 +80,7 @@ export default function DashboardPage() {
       }
 
       const agentMessageId = messageIdRef.current++;
-      // Mark all previous agent messages chip options as consumed (freeze them)
+    
       setChat(prev => [
         ...prev.map(m => m.role === "agent" && m.options ? { ...m, options_consumed: true } : m),
         {
