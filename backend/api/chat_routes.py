@@ -117,6 +117,7 @@ def _create_session(customer_id: str, language: str = "auto", session_id: str | 
     if session_id:
         try:
             with UserDatabase(db_path=SQLITE_PATH) as db:
+                db.init_user_schema()   # ensure messages + summary columns exist
                 prior_messages = db.get_session_messages(session_id)
                 prior_summary  = db.get_session_summary(session_id)
         except Exception as e:
@@ -220,6 +221,9 @@ async def send_message(request: ChatRequest):
         if session_lang not in ("auto", "AUTO", None, ""):
             # User has LOCKED the language via the toggle → always use that
             detected_lang = session_lang
+            # Keep sticky preference in sync so it survives mode switches
+            if detected_lang != "en":
+                SESSIONS[session_id]["preferred_language"] = detected_lang
         else:
             # AUTO mode: detect from this message
             message_lang = detect_language(raw_input)
@@ -324,6 +328,7 @@ async def send_message(request: ChatRequest):
         # Persist to DB (non-fatal if it fails)
         try:
             with UserDatabase(db_path=SQLITE_PATH) as db:
+                db.init_user_schema()   # ensure messages + summary columns exist
                 db.save_session_messages(session_id, updated_messages)
         except Exception as db_err:
             logger.warning(f"⚠️  Could not persist messages to DB: {db_err}")
@@ -341,6 +346,18 @@ async def send_message(request: ChatRequest):
             final_response_text = await translate_to_user_language(
                 english_response, detected_lang, translate_llm
             )
+
+            # ── Post-translation sanity check ─────────────────────────────
+            # If the result still looks like English (translation silently
+            # failed), log a warning. The translate_to_user_language function
+            # already retries internally, so this is just an audit log.
+            from agent.language import _looks_like_english
+            if detected_lang == "hi" and _looks_like_english(final_response_text):
+                logger.warning(
+                    f"⚠️  [{session_id[:8]}] Hindi translation may have failed — "
+                    f"response still looks like English. Check Ollama model capacity."
+                )
+
             # Translate quick-reply chip labels
             if english_options:
                 options_blob = "\n".join(english_options)
@@ -435,13 +452,18 @@ async def confirm_save(request: ConfirmSaveRequest):
     Translates response into the session's preferred language.
     """
     try:
-        # Look up session to get preferred language
+        # Look up session to get preferred language.
+        # preferred_language is the sticky language set during translate-in.
+        # Falls back to language (set each turn) then to "en".
         session = SESSIONS.get(request.session_id)
         session_lang = (
             (session or {}).get("preferred_language")
             or (session or {}).get("language")
             or "en"
         )
+        # Normalise: "auto" is not a real language for translation purposes
+        if session_lang in ("auto", "AUTO", None, ""):
+            session_lang = "en"
 
         async def _translate(text: str) -> str:
             """Translate response to user's language (non-fatal)."""
