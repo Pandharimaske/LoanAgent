@@ -17,8 +17,8 @@ from langchain_ollama import ChatOllama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.schemas import FieldClassification, FieldClassificationResult
-from agent.prompts import FIELD_CLASSIFICATION_PROMPT, QUERY_REWRITE_PROMPT
+from agent.schemas import ExtractionResult, ExtractedField
+from agent.prompts import EXTRACTION_PROMPT, QUERY_REWRITE_PROMPT
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -115,44 +115,64 @@ async def rewrite_query_for_retrieval(
         return user_input
 
 
+async def extract_fields_with_llm(
+    user_input: str,
+    memory_context: str = "No context available",
+    conversation_history: str = "No prior conversation",
+) -> List[ExtractedField]:
+    """
+    Extract all facts from the user's message using the LLM.
+
+    Returns a flat list of ExtractedField objects.
+    Each field has: key, value, is_correction.
+
+    Routing (SQLite vs ChromaDB) is NOT done here — the caller decides
+    by checking whether field.key is in CustomerMemory.model_fields.
+    """
+    try:
+        llm = create_llm(temperature=0.1)  # Low temp for deterministic extraction
+        structured_llm = llm.with_structured_output(ExtractionResult)
+        chain = EXTRACTION_PROMPT | structured_llm
+
+        result: ExtractionResult = await chain.ainvoke({
+            "user_input":          user_input,
+            "memory_context":      memory_context,
+            "conversation_history": conversation_history,
+        })
+
+        fields = result.fields or []
+        logger.info(f"📊 Extraction: {len(fields)} field(s) | {result.summary}")
+        for f in fields:
+            logger.debug(f"   {'[CORRECTION]' if f.is_correction else ''} {f.key}={f.value!r}")
+        return fields
+
+    except Exception as e:
+        logger.error(f"❌ extract_fields_with_llm failed: {e}")
+        return []
+
+
+# Keep backward-compat alias used by any leftover imports
 async def classify_fields_with_llm(
     user_input: str,
     memory_context: str = "No context available",
-    conversation_history: str = "No prior conversation"
-) -> Dict[str, FieldClassification]:
-    """
-    Use LLM to classify incoming information as schema fields or contextual info.
-    
-    Args:
-        user_input: Customer's statement
-        memory_context: Formatted memory block containing known facts and context
-        conversation_history: Formatted string of the recent conversation
-    
-    Returns:
-        {field_name: FieldClassification} for each classified field
-    """
-    try:
-        llm = create_llm(temperature=0.2)
-        
-        structured_llm = llm.with_structured_output(FieldClassificationResult)
-        chain = FIELD_CLASSIFICATION_PROMPT | structured_llm
-        
-        result = await chain.ainvoke({
-            "user_input": user_input,
-            "memory_context": memory_context,
-            "conversation_history": conversation_history
-        })
-        
-        # Return classifications as dict using model_dump()
-        classifications = {
-            clf.field_name: clf for clf in result.classifications
-        }
-        
-        logger.info(f"🏷️  Field Classification: {len(classifications)} fields classified")
-        logger.debug(f"   Summary: {result.summary}")
-        
-        return classifications
-        
-    except Exception as e:
-        logger.error(f"❌ Field classification failed: {e}")
-        return {}
+    conversation_history: str = "No prior conversation",
+    **_,
+) -> dict:
+    """Deprecated: use extract_fields_with_llm instead."""
+    from agent.schemas import FieldClassification
+    fields = await extract_fields_with_llm(user_input, memory_context, conversation_history)
+    # Shim: wrap into the old dict-of-FieldClassification format so old call sites don't crash
+    result = {}
+    for f in fields:
+        try:
+            result[f.key] = FieldClassification(
+                raw_value=f.value,
+                field_type="SCHEMA_FIELD",
+                field_name=f.key,
+                normalized_value=f.value,
+                category="other",
+                is_correction=f.is_correction,
+            )
+        except Exception:
+            pass
+    return result

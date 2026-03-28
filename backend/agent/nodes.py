@@ -12,17 +12,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Schemas
 from agent.schemas import (
-    FieldClassification,
-    FieldClassificationResult,
-    ExtractedEntity,
-    EntityExtractionResult,
-    SchemaFieldValidator,
+    ExtractionResult,
+    ExtractedField,
     RouterDecision,
 )
 
 # Helpers
 from agent.helpers import (
-    classify_fields_with_llm,
+    extract_fields_with_llm,
     format_conversation_history,
 )
 
@@ -47,14 +44,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     # Schemas
-    "FieldClassification",
-    "FieldClassificationResult",
-    "ExtractedEntity",
-    "EntityExtractionResult",
-    "SchemaFieldValidator",
+    "ExtractionResult",
+    "ExtractedField",
     "RouterDecision",
     # Helpers
-    "classify_fields_with_llm",
+    "extract_fields_with_llm",
     "format_conversation_history",
     # Core nodes
     "check_token_threshold",

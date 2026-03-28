@@ -187,46 +187,51 @@ MISMATCH_VERIFICATION_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # ============================================================================
-# FIELD CLASSIFICATION PROMPT
+# EXTRACTION PROMPT  (replaces FIELD_CLASSIFICATION)
+# Routing (SQLite vs ChromaDB) is decided in code, not by the LLM.
 # ============================================================================
 
-FIELD_CLASSIFICATION_SYSTEM_PROMPT = f"""You are a data classification system for a loan platform.
+EXTRACTION_SYSTEM_PROMPT = f"""You are a fact extraction system for a loan agent platform.
 
-Classify each piece of information in the customer statement:
-  SCHEMA_FIELD    → maps to a column in the database (use exact field name)
-  CONTEXTUAL_INFO → useful info that doesn't fit any schema column
+Your job: extract ALL facts the customer is sharing and map them to the right field names.
 
-DATABASE SCHEMA:
+KNOWN SCHEMA FIELDS (use these exact names when the info fits):
 {DATABASE_SCHEMA_REFERENCE}
 
 RULES:
-- Extract EVERYTHING mentioned — leave nothing behind.
-- Use conversation history to resolve short answers / pronouns.
-- For date_of_birth: normalized_value MUST be YYYY-MM-DD regardless of input format.
-- is_correction = true ONLY when user explicitly corrects a previously stated value.
+1. Extract EVERYTHING — don't miss any fact.
+2. Use the EXACT field name from the schema above when the info matches a known field.
+   - "I earn 50,000/month" → key="monthly_income", value="50000"
+   - "I live in Pune" → key="city", value="Pune"
+   - "CIBIL is 720" → key="cibil_score", value="720"
+3. If the info doesn't fit any schema field, use a short descriptive label as the key.
+   - "I want to expand my textile business" → key="loan_goal", value="expand textile business"
+   - "I'm worried about my low salary" → key="concern", value="low salary"
+4. Use conversation history to resolve pronouns and short answers.
+   - If agent asked "What is your income?" and user replied "50,000" → key="monthly_income"
+5. is_correction = true ONLY when user explicitly corrects a previous value.
+6. Do NOT re-extract things already in the customer profile.
+7. If the user said nothing extractable (greetings, small talk), return an empty fields list.
 """
 
-FIELD_CLASSIFICATION_USER_PROMPT = """CUSTOMER PROFILE (already known — do NOT re-extract these):
+EXTRACTION_USER_PROMPT = """EXISTING CUSTOMER PROFILE (already known — do NOT re-extract):
 {memory_context}
 
-RECENT CONVERSATION:
+RECENT CONVERSATION (for context):
 {conversation_history}
 
 CUSTOMER STATEMENT:
 "{user_input}"
 
-Classify every new piece of information. For each item provide:
-  raw_value       – exact words from the customer
-  field_type      – "SCHEMA_FIELD" or "CONTEXTUAL_INFO"
-  field_name      – DB column name (SCHEMA_FIELD) or short label (CONTEXTUAL_INFO)
-  normalized_value – cleaned value ready for storage
-  category        – personal | income | employment | loan | credit | other
-  is_correction   – true if explicitly correcting a previous value, else false"""
+Extract every NEW fact the customer is sharing. Return as a list of {{key, value, is_correction}} objects."""
 
-FIELD_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", FIELD_CLASSIFICATION_SYSTEM_PROMPT),
-    ("human",  FIELD_CLASSIFICATION_USER_PROMPT),
+EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", EXTRACTION_SYSTEM_PROMPT),
+    ("human",  EXTRACTION_USER_PROMPT),
 ])
+
+# Keep old name as alias so any remaining references don't break during transition
+FIELD_CLASSIFICATION_PROMPT = EXTRACTION_PROMPT
 
 
 # ============================================================================

@@ -1,91 +1,59 @@
 """
-Pydantic schemas for structured LLM outputs and validation.
+Pydantic schemas for structured LLM outputs.
 
-Organized by concern:
-- Field Classification : FieldClassification, FieldClassificationResult
-- Entity Extraction    : ExtractedEntity, EntityExtractionResult
-- Schema Validation    : SchemaFieldValidator
-- Routing              : RouterDecision
+- ExtractionResult  : LLM extracts key-value pairs; routing (SQLite vs ChromaDB)
+                      is decided in code by checking CustomerMemory.model_fields
+- RouterDecision    : Routing signal from the LLM router node
 """
 
-from typing import Literal, Optional, Union, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 
-# Ollama's JSON schema validator rejects `Any` (serialized as `{}` with no type).
-# Use a concrete Union so Ollama receives a valid `anyOf` constraint.
-ScalarValue = Union[str, float, int, bool, None]
-
 
 # ============================================================================
-# FIELD CLASSIFICATION SCHEMAS
+# EXTRACTION SCHEMA  (replaces FieldClassification)
 # ============================================================================
 
-class FieldClassification(BaseModel):
-    """Classification of a single piece of information from the user."""
-    raw_value: str = Field(..., description="Original customer input text")
-    field_type: Literal["SCHEMA_FIELD", "CONTEXTUAL_INFO"] = Field(
-        ..., description="SCHEMA_FIELD if it maps to a DB column, CONTEXTUAL_INFO otherwise"
+class ExtractedField(BaseModel):
+    """
+    A single piece of information extracted from the user's message.
+
+    The LLM's ONLY job here is to extract facts and map them to the right
+    field name where possible. The decision of WHERE to store (SQLite vs ChromaDB)
+    is made in code by checking CustomerMemory.model_fields.
+    """
+    key: str = Field(
+        ...,
+        description=(
+            "Exact CustomerMemory field name if this maps to a schema column "
+            "(e.g. 'monthly_income', 'city', 'cibil_score'). "
+            "Otherwise use a short descriptive label (e.g. 'loan_goal', 'concern')."
+        ),
     )
-    field_name: str = Field(
-        ..., description="Exact DB column name if SCHEMA_FIELD, else a short semantic label"
+    value: str = Field(
+        ...,
+        description="The raw value exactly as expressed by the customer.",
     )
-    normalized_value: ScalarValue = Field(
-        default=None, description="Cleaned/coerced value ready for DB storage"
-    )
-    category: str = Field(..., description="Topic group: income | employment | personal | loan | other")
     is_correction: bool = Field(
         default=False,
         description=(
-            "True ONLY when the user is explicitly correcting or updating a previously "
-            "stated value (e.g. 'actually my income is 60k, not 50k'). False for first-time statements."
+            "True ONLY when the customer is explicitly correcting a previously "
+            "stated value (e.g. 'actually my income is 60k, not 50k'). "
+            "False for all first-time statements."
         ),
     )
 
 
-class FieldClassificationResult(BaseModel):
-    """Full LLM response for field classification."""
-    classifications: List[FieldClassification] = Field(
-        default_factory=list, description="One entry per extracted piece of information"
+class ExtractionResult(BaseModel):
+    """Structured LLM response for the extraction step."""
+    fields: List[ExtractedField] = Field(
+        default_factory=list,
+        description="All facts extracted from the customer statement. Extract everything — miss nothing.",
     )
-    summary: str = Field(..., description="One-line summary of what was extracted")
-
-
-# ============================================================================
-# ENTITY EXTRACTION SCHEMAS  (used by entity extraction prompt — legacy)
-# ============================================================================
-
-class ExtractedEntity(BaseModel):
-    """Single extracted entity from customer input."""
-    raw_value: str = Field(..., description="Exact text from customer")
-    normalized_value: ScalarValue = Field(..., description="Cleaned/processed value")
-    value_type: str = Field(..., description="Data type: string | number | date | boolean")
-    category: str = Field(
-        ...,
-        description="income | employment | personal | communication | concern | intent | other",
+    summary: str = Field(
+        default="",
+        description="One-line summary of what was extracted (for logging).",
     )
-    storage_target: str = Field(..., description="SQLite | ChromaDB")
-    confidence: float = Field(..., description="Confidence 0.0–1.0")
-
-
-class EntityExtractionResult(BaseModel):
-    """LLM entity extraction result."""
-    entities: List[ExtractedEntity] = Field(default_factory=list)
-    summary: str = Field(..., description="Summary of extraction")
-
-
-# ============================================================================
-# SCHEMA FIELD VALIDATION  (Pydantic-level range checks)
-# ============================================================================
-
-class SchemaFieldValidator(BaseModel):
-    """Range-validated schema fields — used for pre-write sanity checks."""
-    monthly_income: Optional[float] = Field(None, ge=0, le=10_000_000)
-    cibil_score: Optional[int] = Field(None, ge=300, le=900)
-    number_of_active_loans: Optional[int] = Field(None, ge=0, le=50)
-    requested_loan_amount: Optional[float] = Field(None, ge=0, le=100_000_000)
-
-    class Config:
-        validate_assignment = True
 
 
 # ============================================================================
@@ -96,10 +64,9 @@ class RouterDecision(BaseModel):
     """
     Structured routing decision produced by the LLM router.
 
-    IMPORTANT — reduced option set:
     Mismatch detection and HITL save-confirmation are handled PROGRAMMATICALLY
-    by extract_memory_node before the LLM router runs.  The LLM only ever needs
-    to decide between two response modes:
+    by extract_memory_node before the LLM router runs. The LLM only chooses
+    between two response modes:
 
       • handle_query   — user is asking a question that needs an answer
       • handle_general — greeting, statement, acknowledgment, small talk
@@ -111,7 +78,7 @@ class RouterDecision(BaseModel):
     ] = Field(
         ...,
         description=(
-            "handle_query  → user asked a question requiring an answer; "
+            "handle_query  → user asked a question requiring a factual answer; "
             "handle_general → greeting / statement / small-talk / acknowledgment"
         ),
     )

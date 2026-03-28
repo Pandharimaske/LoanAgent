@@ -62,7 +62,163 @@ class CustomerMemory(BaseModel):
     created_at: datetime
     last_updated: datetime
 
-    model_config = ConfigDict()
+    model_config = ConfigDict(
+        # Silently coerce compatible types (e.g. "750" → int for cibil_score)
+        coerce_numbers_to_str=False,
+    )
+
+    # ──────────────────────────────────────────────
+    # Field validators
+    # ──────────────────────────────────────────────
+
+    @classmethod
+    def _parse_date(cls, v: object) -> Optional[str]:
+        """Normalize any date string → YYYY-MM-DD (Indian convention DD/MM/YYYY)."""
+        import re
+        if v is None:
+            return None
+        raw = str(v).strip()
+        if not raw:
+            return None
+        # Already ISO
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', raw):
+            try:
+                from datetime import date as _d
+                _d.fromisoformat(raw)
+                return raw
+            except ValueError:
+                pass
+        # python-dateutil
+        try:
+            from dateutil import parser as du
+            return du.parse(raw, dayfirst=True, yearfirst=False).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        # Manual DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY
+        try:
+            parts = re.split(r'[-/.]', raw)
+            if len(parts) == 3:
+                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                from datetime import date as _d
+                return _d(y, m, d).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        return None  # unparseable — will be skipped
+
+    # Individual field validators using Pydantic v2 @field_validator
+    from pydantic import field_validator
+
+    @field_validator("date_of_birth", mode="before")
+    @classmethod
+    def normalize_dob(cls, v):
+        return cls._parse_date(v)
+
+    @field_validator("cibil_score", mode="before")
+    @classmethod
+    def check_cibil(cls, v):
+        if v is None:
+            return v
+        score = int(float(str(v)))
+        if not (300 <= score <= 900):
+            raise ValueError(f"cibil_score {score} out of range 300-900")
+        return score
+
+    @field_validator("monthly_income", "total_existing_emi_monthly",
+                     "coapplicant_income", "requested_loan_amount", mode="before")
+    @classmethod
+    def positive_float(cls, v):
+        if v is None:
+            return v
+        val = float(str(v).replace(",", "").replace("₹", "").strip())
+        if val < 0:
+            raise ValueError(f"Value must be non-negative, got {val}")
+        return val
+
+    @field_validator("requested_tenure_months", "number_of_active_loans", mode="before")
+    @classmethod
+    def positive_int(cls, v):
+        if v is None:
+            return v
+        val = int(float(str(v)))
+        if val < 0:
+            raise ValueError(f"Value must be non-negative, got {val}")
+        return val
+
+    @field_validator("years_at_job", mode="before")
+    @classmethod
+    def non_neg_float(cls, v):
+        if v is None:
+            return v
+        return max(0.0, float(str(v)))
+
+    @field_validator("income_type", mode="before")
+    @classmethod
+    def normalize_income_type(cls, v):
+        if v is None:
+            return v
+        mapping = {"salaried": "salaried", "self employed": "self_employed",
+                   "self_employed": "self_employed", "selfemployed": "self_employed",
+                   "rental": "rental", "business": "self_employed", "freelance": "self_employed"}
+        return mapping.get(str(v).lower().strip(), str(v).lower().strip())
+
+    @field_validator("requested_loan_type", mode="before")
+    @classmethod
+    def normalize_loan_type(cls, v):
+        if v is None:
+            return v
+        mapping = {"home": "home", "house": "home", "housing": "home",
+                   "auto": "auto", "car": "auto", "vehicle": "auto",
+                   "personal": "personal", "business": "business",
+                   "education": "education", "gold": "gold"}
+        return mapping.get(str(v).lower().strip(), str(v).lower().strip())
+
+    # ──────────────────────────────────────────────
+    # Helper: validate a raw partial dict of LLM-extracted fields
+    # ──────────────────────────────────────────────
+
+    @classmethod
+    def validate_partial(cls, raw_fields: dict) -> tuple[dict, dict]:
+        """
+        Attempt to build a CustomerMemory from a partial dict of extracted fields.
+
+        Only fields that exist on the model are validated. Fields that fail
+        validation are collected as errors and excluded from the output.
+
+        Returns:
+            (valid_fields: dict, errors: dict)
+            valid_fields — coerced, validated values ready to write to SQLite
+            errors       — {field_name: error_message} for skipped fields
+        """
+        from datetime import datetime
+        now = datetime.now()
+
+        valid: dict = {}
+        errors: dict = {}
+
+        model_fields = cls.model_fields.keys()
+
+        for field, value in raw_fields.items():
+            if field not in model_fields:
+                # Not a model field — caller should route to ChromaDB
+                errors[field] = "not a model field"
+                continue
+            try:
+                # Validate a single field by building a minimal model instance
+                # with just that field + required fields
+                test_obj = cls.model_validate({
+                    "customer_id": "_validate_",
+                    "created_at": now,
+                    "last_updated": now,
+                    field: value,
+                })
+                coerced = getattr(test_obj, field)
+                if coerced is not None:
+                    valid[field] = coerced
+            except Exception as exc:
+                errors[field] = str(exc)
+
+        return valid, errors
+
 
 
 # ============================================================================
