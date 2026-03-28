@@ -77,6 +77,7 @@ class UserSession(BaseModel):
     expires_at: datetime
     is_active: bool = True
     messages: list = []
+    summary: Optional[str] = None   # LLM-generated summary written when token limit is hit
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}

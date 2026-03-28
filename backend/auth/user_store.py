@@ -88,6 +88,12 @@ class UserDatabase:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Migrate existing table: add summary column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE user_sessions ADD COLUMN summary TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Indexes for frequent queries
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
@@ -354,6 +360,7 @@ class UserDatabase:
                 expires_at=expires_at,
                 is_active=bool(session_data["is_active"]),
                 messages=messages,
+                summary=session_data.get("summary"),   # LLM-generated summary (may be None)
             )
 
         except Exception as e:
@@ -447,6 +454,62 @@ class UserDatabase:
         except Exception as e:
             print(f"❌ Failed to get session messages: {e}")
             return []
+
+    def save_session_summary(self, session_id: str, summary: str) -> bool:
+        """
+        Persist the LLM-generated context summary for a session.
+
+        Called by check_token_threshold when the token limit is hit so that
+        the summary survives server restarts and can be re-injected into context
+        when the session is resumed.
+
+        Args:
+            session_id: The session to update.
+            summary:    The compact LLM-generated summary text.
+
+        Returns:
+            True on success, False on failure.
+        """
+        if not self.connection:
+            self.connect()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE user_sessions SET summary = ? WHERE session_id = ?",
+                (summary, session_id),
+            )
+            self.connection.commit()
+            return True
+        except Exception as e:
+            print(f"❌ Failed to save session summary: {e}")
+            return False
+
+    def get_session_summary(self, session_id: str) -> Optional[str]:
+        """
+        Load the LLM-generated summary for a session, or None if absent.
+
+        Args:
+            session_id: The session to query.
+
+        Returns:
+            Summary string, or None if not set.
+        """
+        if not self.connection:
+            self.connect()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT summary FROM user_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return dict(row).get("summary")  # may be None
+        except Exception as e:
+            print(f"❌ Failed to get session summary: {e}")
+            return None
+
 
     def __enter__(self):
         """Context manager entry."""

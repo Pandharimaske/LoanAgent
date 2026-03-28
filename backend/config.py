@@ -64,8 +64,8 @@ JWT_SECRET = os.getenv("JWT_SECRET", "")  # Must be set in production
 # MEMORY THRESHOLDS & LIMITS
 # ============================================================================
 
-TOKEN_THRESHOLD = int(os.getenv("TOKEN_THRESHOLD", "2000"))
-SESSION_CONTEXT_WINDOW = int(os.getenv("SESSION_CONTEXT_WINDOW", "4096"))
+TOKEN_THRESHOLD = int(os.getenv("TOKEN_THRESHOLD", "160"))
+SESSION_CONTEXT_WINDOW = int(os.getenv("SESSION_CONTEXT_WINDOW", "200"))
 MAX_SESSION_TURNS = int(os.getenv("MAX_SESSION_TURNS", "50"))
 VECTOR_SEARCH_TOP_K = int(os.getenv("VECTOR_SEARCH_TOP_K", "5"))
 

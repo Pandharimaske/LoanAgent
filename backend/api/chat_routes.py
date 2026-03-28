@@ -103,17 +103,38 @@ def _create_session(customer_id: str, language: str = "en", session_id: str | No
     """
     Create an in-memory session entry, seeding message history from DB if
     an existing session_id is provided (e.g. user resuming after server restart).
+
+    If the session had previously been compressed (token threshold was hit),
+    the saved summary is re-injected as a system message so context is not lost.
     """
     sid = session_id or str(uuid.uuid4())
 
     # FIX #10 — seed messages from DB when resuming an existing session
     prior_messages: List[Dict[str, Any]] = []
+    prior_summary: str | None = None
     if session_id:
         try:
             with UserDatabase(db_path=SQLITE_PATH) as db:
                 prior_messages = db.get_session_messages(session_id)
+                prior_summary  = db.get_session_summary(session_id)
         except Exception as e:
-            logger.warning(f"⚠️  Could not load prior messages from DB: {e}")
+            logger.warning(f"⚠️  Could not load prior messages/summary from DB: {e}")
+
+    # If a summary was saved (token compression happened) and the first message
+    # in history is NOT already a system summary, prepend one so the LLM has
+    # a compact recap without re-loading the full (possibly trimmed) history.
+    if prior_summary:
+        has_summary_msg = any(
+            m.get("role") == "system" and "[Earlier conversation summary]" in m.get("content", "")
+            for m in prior_messages
+        )
+        if not has_summary_msg:
+            logger.info(f"📋 Re-injecting session summary into resumed context for {sid[:8]}")
+            prior_messages = [{
+                "role": "system",
+                "content": f"[Earlier conversation summary]: {prior_summary}",
+                "timestamp": datetime.now().isoformat(),
+            }] + prior_messages
 
     SESSIONS[sid] = {
         "session_id":   sid,
@@ -126,6 +147,7 @@ def _create_session(customer_id: str, language: str = "en", session_id: str | No
     logger.info(
         f"✅ Session created: {sid} for {customer_id} "
         f"| {len(prior_messages)} prior messages loaded"
+        + (f" | summary re-injected" if prior_summary else "")
     )
     return sid
 

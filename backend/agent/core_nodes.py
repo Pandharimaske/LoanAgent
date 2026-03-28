@@ -24,6 +24,7 @@ from agent.helpers import format_conversation_history, create_llm, rewrite_query
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from memory.retriever import MemoryRetriever
+from auth.user_store import UserDatabase
 from config import (
     SQLITE_PATH,
     CHROMA_PATH,
@@ -67,7 +68,11 @@ async def check_token_threshold(state: SessionState) -> SessionState:
         state["total_tokens"] = current_tokens
 
         threshold = int(SESSION_CONTEXT_WINDOW * TOKEN_THRESHOLD_PERCENT)
-        logger.info(f"📊 Tokens: {current_tokens}/{threshold}")
+        logger.info(
+            f"[check_token_threshold] session={state.get('session_id','?')!r} "
+            f"tokens={current_tokens} threshold={threshold} "
+            f"msgs={len(messages)}"
+        )
 
         if current_tokens >= threshold and len(messages) > 2:
             logger.warning("⚠️  Threshold exceeded — summarizing older half")
@@ -85,13 +90,17 @@ async def check_token_threshold(state: SessionState) -> SessionState:
                 "decisions, and open questions. Skip pleasantries.\n\n" + old_text
             )
 
+            llm_generated = False
             try:
                 llm = create_llm(temperature=0.2)
                 resp = await llm.ainvoke(summary_prompt)
-                summary_text = resp.content if hasattr(resp, "content") else str(resp)
+                summary_text  = resp.content if hasattr(resp, "content") else str(resp)
+                summary_text  = summary_text.strip()
+                llm_generated = bool(summary_text)   # True only when LLM returned real text
             except Exception as e:
-                logger.error(f"❌ Summarization failed: {e}")
-                summary_text = f"[{len(old_msgs)} earlier messages summarized]"
+                logger.error(f"❌ Summarization LLM call failed: {e}")
+                summary_text  = f"[{len(old_msgs)} earlier messages summarized]"
+                llm_generated = False  # fallback — do NOT persist this to DB
 
             state["messages"] = [{
                 "role": "system",
@@ -100,12 +109,12 @@ async def check_token_threshold(state: SessionState) -> SessionState:
             }] + keep_msgs
             state["total_tokens"]    = _count_tokens(state["messages"])
             state["should_summarize"] = True
-            state["summary"]          = summary_text
+            state["summary"]          = summary_text if llm_generated else None
 
             # Persist real LLM summary to ChromaDB
             customer_id = state.get("customer_id")
             session_id  = state.get("session_id")
-            if customer_id and session_id:
+            if llm_generated and customer_id and session_id:
                 try:
                     vs = VectorStore(persist_path=CHROMA_PATH)
                     vs.add_session_summary(
@@ -113,9 +122,31 @@ async def check_token_threshold(state: SessionState) -> SessionState:
                         session_id=session_id,
                         summary_text=summary_text,
                     )
-                    logger.info(f"📄 In-session summary → ChromaDB: {summary_text[:80]}…")
+                    logger.info(f"📄 LLM summary → ChromaDB: {summary_text[:80]}…")
                 except Exception as e:
                     logger.warning(f"⚠️  ChromaDB summary write failed: {e}")
+
+                # ── Also persist summary to user_sessions.summary in SQLite ──
+                try:
+                    logger.info(
+                        f"[summary_save] Saving to DB: session_id={session_id!r} "
+                        f"summary_len={len(summary_text)} chars"
+                    )
+                    with UserDatabase(db_path=SQLITE_PATH) as db:
+                        db.init_user_schema()   # ensure migration applied
+                        saved = db.save_session_summary(session_id, summary_text)
+                    if saved:
+                        logger.info(f"[summary_save] SUCCESS: summary saved to user_sessions")
+                    else:
+                        logger.warning(f"[summary_save] FAIL: save_session_summary returned False for {session_id!r}")
+                except Exception as e:
+                    logger.warning(f"[summary_save] EXCEPTION: {e}")
+
+            elif not llm_generated:
+                logger.warning(
+                    "⚠️  LLM summary FAILED — using fallback placeholder. "
+                    "Summary NOT saved to DB. Check Ollama is running."
+                )
 
             logger.info(f"✅ Compressed: {current_tokens} → {state['total_tokens']} tokens")
         else:
