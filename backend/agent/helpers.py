@@ -151,28 +151,4 @@ async def extract_fields_with_llm(
         return []
 
 
-# Keep backward-compat alias used by any leftover imports
-async def classify_fields_with_llm(
-    user_input: str,
-    memory_context: str = "No context available",
-    conversation_history: str = "No prior conversation",
-    **_,
-) -> dict:
-    """Deprecated: use extract_fields_with_llm instead."""
-    from agent.schemas import FieldClassification
-    fields = await extract_fields_with_llm(user_input, memory_context, conversation_history)
-    # Shim: wrap into the old dict-of-FieldClassification format so old call sites don't crash
-    result = {}
-    for f in fields:
-        try:
-            result[f.key] = FieldClassification(
-                raw_value=f.value,
-                field_type="SCHEMA_FIELD",
-                field_name=f.key,
-                normalized_value=f.value,
-                category="other",
-                is_correction=f.is_correction,
-            )
-        except Exception:
-            pass
-    return result
+

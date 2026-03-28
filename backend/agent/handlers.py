@@ -39,20 +39,19 @@ logger = logging.getLogger(__name__)
 # FIELD VALIDATION
 # ============================================================================
 
-# Financial fields that need HITL confirmation before writing to SQLite
-# Only field names that exist in VALID_COLUMNS (the SQLite schema) should appear here.
-# Phantom names like 'annual_income', 'net_monthly_income', 'requested_loan_tenure',
-# 'existing_loan_amount' are not DB columns — they were silently rejected by
-# batch_update_fields and caused HITL confirmations that never actually saved anything.
+# Fields that require HITL confirmation before writing to SQLite.
+# Rule: only NUMERICAL financial figures that directly affect eligibility/risk.
+# Preferences and text fields (loan_type, tenure, purpose) are saved silently
+# because they're not sensitive and users should be able to state them freely.
 FINANCIAL_FIELDS: frozenset = frozenset({
-    "monthly_income",
-    "cibil_score",
-    "requested_loan_amount",
-    "requested_loan_type",
-    "requested_tenure_months",
-    "total_existing_emi_monthly",
-    "number_of_active_loans",
-    "coapplicant_income",
+    "monthly_income",            # direct income figure
+    "cibil_score",               # credit score
+    "requested_loan_amount",     # the rupee ask
+    "total_existing_emi_monthly",# affects debt-to-income ratio
+    "number_of_active_loans",    # affects eligibility
+    "coapplicant_income",        # co-applicant income figure
+    # NOT included: requested_loan_type, requested_tenure_months, loan_purpose
+    # — these are preferences, not sensitive numerical data
 })
 
 # ──────────────────────────────────────────────────────────────────────────────
