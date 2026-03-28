@@ -81,26 +81,86 @@ async def check_token_threshold(state: SessionState) -> SessionState:
             old_msgs  = messages[:split]
             keep_msgs = messages[split:]
 
+            # ── Build conversation text, capped so small models don't overflow ──
+            MAX_CHARS = 3000
+            SUMMARY_MARKER = "[Earlier conversation summary]:"
+
+            # Extract any existing summary from old_msgs so it is explicitly
+            # passed to the LLM as "previous summary to preserve" — not buried
+            # as a plain chat line where small models may ignore it.
+            previous_summary = None
+            non_summary_msgs = []
+            for m in old_msgs:
+                content = m.get("content") or ""
+                if m.get("role") == "system" and SUMMARY_MARKER in content:
+                    # Extract the summary text after the marker
+                    idx = content.index(SUMMARY_MARKER) + len(SUMMARY_MARKER)
+                    previous_summary = content[idx:].strip()
+                else:
+                    non_summary_msgs.append(m)
+
             old_text = "\n".join(
-                f"{m.get('role','?').upper()}: {m.get('content','')}" for m in old_msgs
+                f"{m.get('role','?').upper()}: {m.get('content','')}" for m in non_summary_msgs
             )
-            summary_prompt = (
-                "Summarize this loan advisor conversation in 2-3 sentences. "
-                "Keep all key facts: income, loan amount, employment, CIBIL, "
-                "decisions, and open questions. Skip pleasantries.\n\n" + old_text
-            )
+            if len(old_text) > MAX_CHARS:
+                old_text = old_text[-MAX_CHARS:]
+
+            # Build the previous_summary_block injected into the human prompt.
+            # When present: the LLM sees a clearly-labelled section it MUST preserve.
+            if previous_summary:
+                previous_summary_block = (
+                    f"PREVIOUS SUMMARY (ALL facts below MUST be preserved in the new summary):\n"
+                    f"{previous_summary}\n\n"
+                )
+            else:
+                previous_summary_block = ""   # first compression — no prior summary
+
+            # ── Call LLM via structured prompt — retry once on empty response ──
+            from agent.prompts import SESSION_SUMMARY_PROMPT
 
             llm_generated = False
-            try:
-                llm = create_llm(temperature=0.2)
-                resp = await llm.ainvoke(summary_prompt)
-                summary_text  = resp.content if hasattr(resp, "content") else str(resp)
-                summary_text  = summary_text.strip()
-                llm_generated = bool(summary_text)   # True only when LLM returned real text
-            except Exception as e:
-                logger.error(f"❌ Summarization LLM call failed: {e}")
-                summary_text  = f"[{len(old_msgs)} earlier messages summarized]"
-                llm_generated = False  # fallback — do NOT persist this to DB
+            summary_text  = ""
+
+            for attempt in range(2):
+                try:
+                    llm   = create_llm(temperature=0.1)
+                    chain = SESSION_SUMMARY_PROMPT | llm
+                    resp  = await chain.ainvoke({
+                        "conversation_text":    old_text,
+                        "previous_summary_block": previous_summary_block,
+                    })
+                    raw   = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+
+                    # Strip preamble phrases small models add despite instructions
+                    for prefix in ("summary:", "here is the summary:", "here's the summary:",
+                                   "summary of the conversation:", "the summary is:",
+                                   "merged summary:"):
+                        if raw.lower().startswith(prefix):
+                            raw = raw[len(prefix):].strip()
+
+                    if raw:
+                        summary_text  = raw
+                        llm_generated = True
+                        logger.info(
+                            f"[summary] Generated (attempt {attempt+1})"
+                            f"{' [merged with previous]' if previous_summary else ''}"
+                            f": {summary_text[:80]}..."
+                        )
+                        break
+                    else:
+                        logger.warning(f"[summary] attempt {attempt+1}: LLM returned empty, retrying...")
+
+                except Exception as e:
+                    logger.error(f"[summary] attempt {attempt+1} failed: {e}")
+
+            if not llm_generated:
+                # Fallback: stitch previous summary + placeholder so facts aren't lost
+                fallback_parts = []
+                if previous_summary:
+                    fallback_parts.append(previous_summary)
+                fallback_parts.append(f"[{len(non_summary_msgs)} additional messages — LLM summary unavailable]")
+                summary_text = " ".join(fallback_parts)
+                logger.warning("[summary] Both attempts failed — using fallback (previous summary preserved)")
 
             state["messages"] = [{
                 "role": "system",

@@ -97,12 +97,15 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 # QUERY HANDLER PROMPT
 # ============================================================================
 
-QUERY_SYSTEM_PROMPT = """You are a helpful loan officer assistant.
+QUERY_SYSTEM_PROMPT = """You are a concise loan officer assistant.
 
 Rules:
-- Answer using the customer profile and conversation history below.
-- NEVER ask for information that is already in the profile.
-- If you don't have enough data, say so honestly and offer to help."""
+- Answer directly using the customer profile and conversation history.
+- NEVER ask for information already in the profile.
+- If data is missing, say so in one sentence and ask only that one thing.
+- DEFAULT: 1-3 sentences max. No padding, no restating the question.
+- ONLY give a longer answer if the user explicitly asks ("explain", "detail", "how does", "tell me more") or the answer genuinely requires steps/numbers.
+- No filler phrases like "Great question!", "Certainly!", "Of course!"."""
 
 QUERY_HUMAN_PROMPT = """CUSTOMER PROFILE (what we know):
 {memory_context}
@@ -130,12 +133,15 @@ QUERY_ANSWER_PROMPT = PromptTemplate.from_template(
 # GENERAL HANDLER PROMPT
 # ============================================================================
 
-GENERAL_SYSTEM_PROMPT = """You are a friendly and professional loan officer.
+GENERAL_SYSTEM_PROMPT = """You are a friendly, professional loan officer.
 
 Rules:
-- Use the customer profile to personalise your response.
-- NEVER ask for information that is already in the profile.
-- Acknowledge what the customer said naturally; keep it warm and concise."""
+- Keep responses SHORT — 1-2 sentences by default.
+- Use the customer profile to personalise; never repeat info back unnecessarily.
+- NEVER ask for something already in the profile.
+- Acknowledge the customer naturally without filler ("Sure!", "Of course!", "Absolutely!").
+- Only expand beyond 2 sentences if the topic is complex or the user asks for detail.
+- Never volunteer unsolicited lists, tips, or explanations."""
 
 GENERAL_HUMAN_PROMPT = """CUSTOMER PROFILE (what we know):
 {memory_context}
@@ -247,3 +253,66 @@ MEMORY_CONFLICT_TEMPLATE = """I noticed some differences in your information:
 {conflicts}
 
 Could you confirm which values are correct? Accurate details are important for your loan assessment."""
+
+
+# ============================================================================
+# SESSION SUMMARY PROMPT  (used by check_token_threshold in core_nodes.py)
+# ============================================================================
+#
+# This summary REPLACES the older half of the message history when the token
+# threshold is hit.  It is re-injected as a [system] message on the next turn
+# so the agent retains all key facts without exceeding the context window.
+#
+# Design rules for small models (qwen2.5:3b, llama3, etc.):
+#   - System message is short and unambiguous
+#   - Human message has a clear single task with the conversation appended
+#   - Output must be raw text only — no JSON, no bullets, no preamble
+# ============================================================================
+
+SESSION_SUMMARY_SYSTEM_PROMPT = """\
+You are a memory-compression assistant for a loan advisor chatbot.
+
+Your task: produce a single SHORT, DENSE summary that preserves ALL facts — both from
+any previous summary AND from the new conversation turns provided.
+This summary replaces the older portion of the conversation and will be used as context
+for all future turns, so losing any fact makes the agent worse.
+
+STRICT RULES — violating any rule makes the summary useless:
+1. Output ONLY the summary text. No label like "Summary:", no bullets, no markdown.
+2. Write in plain declarative sentences. Third person when referring to the customer.
+3. Preserve ALL numbers exactly as stated: amounts, % rates, CIBIL scores, months, years.
+4. Include EVERY fact — omit nothing financial, personal, or employment-related.
+5. If a PREVIOUS SUMMARY is given, you MUST merge all its facts into the new summary.
+   Do not drop any fact from the previous summary even if it seems obvious.
+6. Do NOT add opinions, advice, or inferences not present in the source text.
+7. Do NOT repeat the same fact twice.
+8. 3-5 sentences maximum. Every sentence must carry new information.
+9. End with any open question, unresolved item, or pending clarification.
+
+FACTS TO ALWAYS CAPTURE IF PRESENT:
+- Income: monthly income, income type (salaried/self-employed)
+- Loan request: amount, type (home/auto/personal), tenure, purpose
+- Credit: CIBIL score, existing EMIs, number of active loans
+- Employment: employer name, job title, years of experience
+- Personal: full name, city, age/DOB, phone
+- Co-applicant: name, relation, income
+- Decisions made or confirmed by the customer
+- Documents mentioned or submitted
+- Any open question or pending clarification\
+"""
+
+SESSION_SUMMARY_HUMAN_PROMPT = """\
+{previous_summary_block}NEW CONVERSATION (latest turns to incorporate):
+{conversation_text}
+
+Task: Write a merged summary that preserves EVERY fact from the previous summary (if any) \
+AND adds all new facts from the conversation above.
+Output ONLY the merged summary — no preamble, no labels.
+
+SUMMARY:\
+"""
+
+SESSION_SUMMARY_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", SESSION_SUMMARY_SYSTEM_PROMPT),
+    ("human",  SESSION_SUMMARY_HUMAN_PROMPT),
+])
