@@ -33,8 +33,8 @@ export default function Home() {
       hoverBorder: "hover:border-emerald-500/40",
       hoverShadow: "hover:shadow-[0_20px_60px_rgba(0,0,0,0.4),0_0_40px_rgba(16,185,129,0.15)]",
       iconGlow: "shadow-[0_0_24px_rgba(16,185,129,0.15)]",
-      title: "Best Rates, Instantly",
-      desc: "Our AI compares rates across 50+ lenders in seconds. Get pre-approval and personalised offers without the paperwork or waiting rooms.",
+      title: "Persistent Memory",
+      desc: "Remembers customer personal information, and loan details across multiple sessions so customers never have to repeat information.",
     },
     {
       icon: Lock,
