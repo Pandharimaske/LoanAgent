@@ -263,11 +263,49 @@ async def handle_mismatch_confirmation(state: SessionState) -> SessionState:
             if any(d in ctx_text for d in days) or "ago" in ctx_text:
                 historical_context = ctx_text[:200]
 
+        # ── Build changelog context for the mismatched fields ────────────
+        customer_id = state.get("customer_id", "")
+        mismatch_fields = list(mismatches.keys())
+        changelog_context = "No recent change history available."
+
+        if customer_id and mismatch_fields:
+            try:
+                from memory.sqlite_store import MemoryDatabase
+                from config import SQLITE_PATH
+                import datetime as _dt
+
+                with MemoryDatabase(db_path=SQLITE_PATH) as db:
+                    db.init_changelog_schema()
+                    history = db.get_all_recent_changelog(
+                        customer_id, days=15, fields=mismatch_fields
+                    )
+
+                if history:
+                    lines = []
+                    for entity, rows in history.items():
+                        label = entity.replace("_", " ").title()
+                        for row in rows[:3]:  # max 3 rows per field
+                            ts_raw = row.get("timestamp") or row.get("old_timestamp")
+                            try:
+                                ts = _dt.datetime.fromisoformat(ts_raw)
+                                day_str = ts.strftime("%A, %d %b %Y at %I:%M %p")
+                            except Exception:
+                                day_str = ts_raw or "unknown date"
+                            old = row.get("old_val") or "—"
+                            new = row.get("upd_val", "?")
+                            lines.append(
+                                f"• {label}: changed from {old!r} → {new!r} on {day_str}"
+                            )
+                    if lines:
+                        changelog_context = "\n".join(lines)
+            except Exception as cl_err:
+                logger.warning(f"⚠️  changelog lookup failed: {cl_err}")
+
         llm   = create_llm(temperature=0.4)
         chain = MISMATCH_VERIFICATION_PROMPT | llm
         resp  = await chain.ainvoke({
             "mismatch_details":   "\n\n".join(conflict_parts),
-            "historical_context": historical_context,
+            "changelog_context":  changelog_context,
             "customer_profile":   json.dumps(customer_facts, indent=2) if customer_facts else "{}",
         })
 

@@ -166,34 +166,29 @@ GENERAL_RESPONSE_PROMPT = ChatPromptTemplate.from_messages([
 # MISMATCH CONFIRMATION PROMPT
 # ============================================================================
 
-MISMATCH_VERIFICATION_SYSTEM_PROMPT = """You are a friendly loan assistant helping a common person with their loan application.
+MISMATCH_VERIFICATION_SYSTEM_PROMPT = """You are a polite, empathetic customer service rep for a loan platform.
 
-Task: You noticed a difference in the customer's information. Tell them simply and ask which one is correct.
+Task: Tell the customer we noticed a discrepancy and ask them to confirm which value is correct.
+Tone: warm, professional, non-accusatory.
 
-Rules:
-- Use PLAIN, SIMPLE language — like talking to a friend, not writing a legal document.
-- Be very short: 2-3 sentences maximum.
-- State the two values clearly (old vs new).
-- Ask which one is right.
-- Do NOT use complex words, long explanations, or formal language.
-- Do NOT say things like "discrepancy", "assessment", "accuracy matters", "conflicting data".
-
-Example of GOOD response:
-"We have your salary saved as ₹50,000. You just mentioned ₹70,000. Which one is correct?"
-
-Example of BAD response (too long and formal):
-"I noticed a discrepancy in your monthly income data. Our records show ₹50,000 while you provided ₹70,000. Accurate financial data is crucial for proper loan assessment..."""""
+Steps:
+1. Name the conflicting field(s) clearly — old value vs new value.
+2. Use the CHANGE HISTORY to give specific context: mention the date/day when the old value was recorded.
+   - Good: "You told us ₹50,000 on Monday (March 24) but are now saying ₹70,000."
+   - If no history available, say "when you last updated your profile".
+3. Ask which value is correct.
+4. Keep it concise — 2-4 sentences maximum."""
 
 MISMATCH_VERIFICATION_USER_PROMPT = """CONFLICTING INFORMATION:
 {mismatch_details}
 
-WHEN OLD INFO WAS RECORDED:
-{historical_context}
+CHANGE HISTORY (last 15 days — use dates/days to give specific context):
+{changelog_context}
 
 CUSTOMER PROFILE:
 {customer_profile}
 
-Write a SHORT, SIMPLE 1-2 sentence message. State the two values and ask which is correct. Nothing more."""
+Write the confirmation message."""
 
 MISMATCH_VERIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", MISMATCH_VERIFICATION_SYSTEM_PROMPT),

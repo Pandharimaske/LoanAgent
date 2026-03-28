@@ -153,8 +153,9 @@ try:
     memory_db = MemoryDatabase()
     memory_db.connect()
     memory_db.init_schema()
+    memory_db.init_changelog_schema()   # ← customer_changelog table
     memory_db.close()
-    print("   ✓ Memory database schema initialized")
+    print("   ✓ Memory database schema initialized (incl. changelog)")
 except Exception as e:
     print(f"   ✗ Error initializing memory database: {e}")
     sys.exit(1)

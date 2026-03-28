@@ -1,8 +1,11 @@
 """
 SQLite database operations for customer memory.
-Single table — current values only.
-No status columns (removed to halve schema size).
-application_status is the only non-value column kept (business lifecycle, not data quality).
+Two tables:
+  customer_memory   — current field values (one row per customer)
+  customer_changelog — full audit trail of every field change
+
+changelog schema: customer_id | entity | old_val | old_timestamp | upd_val | timestamp
+Only the last 15 days of changelog are surfaced to the agent (older kept for audit).
 """
 
 import sqlite3
@@ -131,7 +134,164 @@ class MemoryDatabase:
             "CREATE INDEX IF NOT EXISTS idx_customer_updated ON customer_memory(last_updated)"
         )
         self.connection.commit()
-        logger.info("✅ Database schema initialized")
+        logger.info("✅ customer_memory schema initialized")
+
+    def init_changelog_schema(self) -> None:
+        """
+        Create customer_changelog table if it doesn't exist.
+        Safe to call multiple times (idempotent).
+
+        Schema:
+            customer_id   — FK to customer_memory
+            entity        — field name (e.g. 'monthly_income')
+            old_val       — previous value as text (NULL on first write)
+            old_timestamp — when old_val was last set (NULL on first write)
+            upd_val       — new value as text
+            timestamp     — when this change was recorded (UTC ISO-8601)
+        """
+        self._ensure_connection()
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS customer_changelog (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_id   TEXT    NOT NULL,
+                entity        TEXT    NOT NULL,
+                old_val       TEXT,
+                old_timestamp TEXT,
+                upd_val       TEXT    NOT NULL,
+                timestamp     TEXT    NOT NULL
+            )
+        """)
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_changelog_customer_entity "
+            "ON customer_changelog(customer_id, entity, timestamp DESC)"
+        )
+        self.connection.commit()
+        logger.info("✅ customer_changelog schema initialized")
+
+    # --------------------------------------------------------- changelog
+
+    def log_field_change(
+        self,
+        customer_id: str,
+        entity: str,
+        old_val: Any,
+        old_timestamp: Optional[str],
+        upd_val: Any,
+    ) -> None:
+        """
+        Write one row to customer_changelog.
+        Called automatically inside batch_update_fields and update_field_value.
+        """
+        self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO customer_changelog
+                    (customer_id, entity, old_val, old_timestamp, upd_val, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    customer_id,
+                    entity,
+                    str(old_val) if old_val is not None else None,
+                    old_timestamp,
+                    str(upd_val),
+                    now,
+                ),
+            )
+            # Note: caller is responsible for commit
+        except Exception as exc:
+            logger.warning(f"⚠️  changelog write failed for {entity}: {exc}")
+
+    def get_field_changelog(
+        self,
+        customer_id: str,
+        entity: str,
+        days: int = 15,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return changelog entries for a specific field, limited to the last `days` days.
+        Ordered newest-first.
+
+        Returns list of dicts:
+            {entity, old_val, old_timestamp, upd_val, timestamp}
+        """
+        self._ensure_connection()
+        cutoff = (
+            datetime.utcnow()
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+        )
+        import datetime as dt
+        cutoff = cutoff - dt.timedelta(days=days)
+        cutoff_str = cutoff.isoformat()
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT entity, old_val, old_timestamp, upd_val, timestamp
+            FROM   customer_changelog
+            WHERE  customer_id = ?
+              AND  entity = ?
+              AND  timestamp >= ?
+            ORDER BY timestamp DESC
+            """,
+            (customer_id, entity, cutoff_str),
+        )
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    def get_all_recent_changelog(
+        self,
+        customer_id: str,
+        days: int = 15,
+        fields: Optional[List[str]] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Return changelog for multiple fields (or all fields) in the last `days` days.
+        Returns {entity: [rows...]} grouped by field name.
+
+        Args:
+            customer_id: Customer identifier
+            days:        Look-back window (default 15)
+            fields:      If provided, only fetch changelog for these specific fields.
+                         If None/empty, fetch for all tracked fields.
+        """
+        self._ensure_connection()
+        import datetime as dt
+        cutoff = datetime.utcnow() - dt.timedelta(days=days)
+        cutoff_str = cutoff.isoformat()
+
+        cursor = self.connection.cursor()
+        if fields:
+            placeholders = ",".join("?" * len(fields))
+            cursor.execute(
+                f"""
+                SELECT entity, old_val, old_timestamp, upd_val, timestamp
+                FROM   customer_changelog
+                WHERE  customer_id = ?
+                  AND  entity IN ({placeholders})
+                  AND  timestamp >= ?
+                ORDER BY entity, timestamp DESC
+                """,
+                (customer_id, *fields, cutoff_str),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT entity, old_val, old_timestamp, upd_val, timestamp
+                FROM   customer_changelog
+                WHERE  customer_id = ?
+                  AND  timestamp >= ?
+                ORDER BY entity, timestamp DESC
+                """,
+                (customer_id, cutoff_str),
+            )
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for row in cursor.fetchall():
+            r = dict(row)
+            result.setdefault(r["entity"], []).append(r)
+        return result
 
     # --------------------------------------------------------------- helpers
 
@@ -290,7 +450,7 @@ class MemoryDatabase:
         value: Any,
     ) -> bool:
         """
-        Update a single field value.
+        Update a single field value and log the change to customer_changelog.
         Ensures customer row exists first (no silent data loss on new customers).
         Returns True on success.
         """
@@ -300,13 +460,25 @@ class MemoryDatabase:
 
         self.ensure_customer_exists(customer_id)
         self._ensure_connection()
-        now = datetime.now().isoformat()
+        now = datetime.utcnow().isoformat()
 
         try:
+            # Read old value + its timestamp for changelog
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT {field_name}, last_updated FROM customer_memory WHERE customer_id=?",
+                (customer_id,),
+            )
+            row = cursor.fetchone()
+            old_val       = row[field_name] if row else None
+            old_timestamp = row["last_updated"] if row else None
+
             self.connection.execute(
                 f"UPDATE customer_memory SET {field_name}=?, last_updated=? WHERE customer_id=?",
                 (value, now, customer_id),
             )
+            # Log the change
+            self.log_field_change(customer_id, field_name, old_val, old_timestamp, value)
             self.connection.commit()
             logger.debug(f"✅ {customer_id} | {field_name}={value!r}")
             return True
@@ -321,6 +493,7 @@ class MemoryDatabase:
     ) -> Dict[str, bool]:
         """
         Atomically update multiple fields in a single transaction.
+        Reads old values before writing so they can be logged to changelog.
         Returns {field_name: success} for each field.
         """
         if not fields:
@@ -329,8 +502,30 @@ class MemoryDatabase:
         self.ensure_customer_exists(customer_id)
         self._ensure_connection()
 
+        # Pre-read old values + last_updated for all fields we're about to change
+        valid_fields = [f for f in fields if f in VALID_COLUMNS]
+        old_values: Dict[str, Any]   = {}
+        old_timestamps: Dict[str, str] = {}
+        if valid_fields:
+            try:
+                cols = ", ".join(valid_fields) + ", last_updated"
+                cursor = self.connection.cursor()
+                cursor.execute(
+                    f"SELECT {cols} FROM customer_memory WHERE customer_id=?",
+                    (customer_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    row_d = dict(row)
+                    ts = row_d.get("last_updated")
+                    for f in valid_fields:
+                        old_values[f]     = row_d.get(f)
+                        old_timestamps[f] = ts
+            except Exception as exc:
+                logger.warning(f"⚠️  Could not read old values for changelog: {exc}")
+
         results: Dict[str, bool] = {}
-        now = datetime.now().isoformat()
+        now = datetime.utcnow().isoformat()
 
         try:
             with self.connection:
@@ -345,6 +540,14 @@ class MemoryDatabase:
                             f"UPDATE customer_memory SET {field_name}=?, last_updated=? WHERE customer_id=?",
                             (value, now, customer_id),
                         )
+                        # Log change to changelog
+                        self.log_field_change(
+                            customer_id,
+                            field_name,
+                            old_values.get(field_name),
+                            old_timestamps.get(field_name),
+                            value,
+                        )
                         results[field_name] = True
                     except sqlite3.OperationalError as exc:
                         logger.error(f"❌ batch field {field_name}: {exc}")
@@ -355,7 +558,7 @@ class MemoryDatabase:
                 results.setdefault(f, False)
 
         ok = sum(1 for v in results.values() if v)
-        logger.info(f"💾 batch_update {customer_id}: {ok}/{len(results)} OK")
+        logger.info(f"💾 batch_update {customer_id}: {ok}/{len(results)} OK → changelog written")
         return results
 
     def delete_customer(self, customer_id: str) -> None:
