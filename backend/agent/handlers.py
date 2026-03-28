@@ -27,6 +27,7 @@ from agent.prompts import (
     MISMATCH_VERIFICATION_PROMPT,
 )
 from agent.helpers import extract_fields_with_llm, create_llm, format_conversation_history
+from agent.tools import ALL_TOOLS
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
 from config import SQLITE_PATH, CHROMA_PATH
@@ -342,10 +343,20 @@ async def handle_save_confirmation(state: SessionState) -> SessionState:
 
 async def handle_query(state: SessionState) -> SessionState:
     """
-    Answer the user's question.
-    Context = SQLite profile facts + ChromaDB contextual chunks + last N turns.
+    Answer the user's question using a tool-augmented LLM.
+
+    The LLM is bound with ALL_TOOLS (e.g. search_loan_products) and decides
+    autonomously whether to call a tool before generating its final answer.
+
+    Execution flow:
+      1. Bind tools to LLM
+      2. LLM receives user question + customer profile + conversation history
+      3. LLM either answers directly OR calls search_loan_products tool first
+      4. If tool called → execute tool → feed result back → get final answer
+      5. Return final answer as agent_response
     """
     try:
+        import json as _json
         user_input     = state.get("user_input", "")
         memory_context = state.get("memory_prompt_block") or "No customer profile available."
         messages       = state.get("messages") or []
@@ -353,23 +364,83 @@ async def handle_query(state: SessionState) -> SessionState:
         # Last N turns of the CURRENT session (exclude the current user message)
         conv_history = format_conversation_history(messages[:-1], max_turns=6)
 
-        llm   = create_llm(temperature=0.2)
-        chain = QUERY_ANSWER_CHAT_PROMPT | llm
+        # Build initial prompt messages
+        from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+        sys_msg = SystemMessage(content=(
+            "You are a concise loan officer assistant.\n"
+            "Rules:\n"
+            "- Answer directly using the customer profile and conversation history.\n"
+            "- NEVER ask for information already in the profile.\n"
+            "- If data is missing, say so in one sentence and ask only that one thing.\n"
+            "- DEFAULT: 1-3 sentences max. No padding, no restating the question.\n"
+            "- ONLY give a longer answer if the user explicitly asks for detail or it requires steps/numbers.\n"
+            "- No filler phrases like 'Great question!', 'Certainly!', 'Of course!'.\n"
+            "- Use the search_loan_products tool whenever the question is about loan rates, "
+            "eligibility criteria, required documents, government schemes, or any bank product details."
+        ))
+        human_msg = HumanMessage(content=(
+            f"CUSTOMER PROFILE (what we know):\n{memory_context}\n\n"
+            f"RECENT CONVERSATION:\n{conv_history}\n\n"
+            f"CUSTOMER'S QUESTION:\n{user_input}\n\n"
+            "Answer clearly and concisely. Use the search_loan_products tool if needed."
+        ))
 
-        response = await chain.ainvoke({
-            "user_input":          user_input,
-            "memory_context":      memory_context,
-            "conversation_history": conv_history,
-        })
+        # Bind tools to LLM
+        base_llm      = create_llm(temperature=0.2)
+        llm_with_tools = base_llm.bind_tools(ALL_TOOLS)
 
-        answer = response.content if hasattr(response, "content") else str(response)
+        # First LLM call — may return a tool_call or a direct answer
+        ai_response = await llm_with_tools.ainvoke([sys_msg, human_msg])
+
+        # Check if LLM wants to call a tool
+        tool_calls = getattr(ai_response, "tool_calls", None) or []
+
+        if tool_calls:
+            # Execute each requested tool and collect results
+            tool_result_messages = []
+            tool_results_text    = []
+
+            for tc in tool_calls:
+                tool_name = tc.get("name") or (tc.name if hasattr(tc, "name") else "")
+                tool_args = tc.get("args") or (tc.args if hasattr(tc, "args") else {})
+                tool_id   = tc.get("id") or (tc.id if hasattr(tc, "id") else tool_name)
+
+                # Find and execute the tool
+                tool_fn = next((t for t in ALL_TOOLS if t.name == tool_name), None)
+                if tool_fn:
+                    try:
+                        result_text = tool_fn.invoke(tool_args)
+                        logger.info(f"🔧 Tool '{tool_name}' called → {len(result_text)} chars")
+                    except Exception as te:
+                        result_text = f"Tool error: {te}"
+                        logger.warning(f"⚠️  Tool '{tool_name}' failed: {te}")
+                else:
+                    result_text = f"Tool '{tool_name}' not found."
+
+                tool_results_text.append(result_text)
+                tool_result_messages.append(
+                    ToolMessage(content=result_text, tool_call_id=tool_id)
+                )
+
+            # Second LLM call — synthesise final answer with tool results
+            follow_up = HumanMessage(content="Now answer the customer's question using the tool results above.")
+            final_response = await base_llm.ainvoke(
+                [sys_msg, human_msg, ai_response] + tool_result_messages + [follow_up]
+            )
+            answer = final_response.content if hasattr(final_response, "content") else str(final_response)
+            logger.info(f"🔧 Tool-augmented answer generated ({len(tool_calls)} tool call(s))")
+        else:
+            # No tool call — direct answer
+            answer = ai_response.content if hasattr(ai_response, "content") else str(ai_response)
+            logger.info("💬 Query answered directly (no tool call)")
+
+        answer = answer.strip()
         state.update({
             "query_response":  answer,
             "agent_response":  answer,
             "response_type":   "text",
             "response_options": ["📋 Check eligibility", "💬 Update profile", "❓ Ask another question"],
         })
-        logger.info("💬 Query answered")
         return state
 
     except Exception as e:

@@ -35,7 +35,7 @@ echo ""
 # STEP 1: Check .env file
 # ============================================================================
 
-echo -e "${BLUE}[1/4]${NC} Checking environment configuration..."
+echo -e "${BLUE}[1/5]${NC} Checking environment configuration..."
 
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     echo -e "${YELLOW}⚠️  .env file not found at $BACKEND_DIR/.env${NC}"
@@ -89,7 +89,7 @@ echo ""
 # STEP 2: Check and create data directory
 # ============================================================================
 
-echo -e "${BLUE}[2/4]${NC} Checking database directories..."
+echo -e "${BLUE}[2/5]${NC} Checking database directories..."
 
 if [ ! -d "$DATA_DIR" ]; then
     echo -e "${YELLOW}📁 Creating data directory...${NC}"
@@ -103,7 +103,7 @@ echo -e "${GREEN}✅${NC} Data directory: $DATA_DIR"
 # ============================================================================
 
 echo ""
-echo -e "${BLUE}[3/4]${NC} Checking databases..."
+echo -e "${BLUE}[3/5]${NC} Checking databases..."
 
 SQLITE_FILE="$DATA_DIR/memory.db"
 CHROMA_DIR="$DATA_DIR/chroma_db"
@@ -180,10 +180,46 @@ cd "$PROJECT_ROOT"
 echo ""
 
 # ============================================================================
+# STEP 4: Ingest loan products into ChromaDB (runs only if collection is empty)
+# ============================================================================
+
+echo -e "${BLUE}[4/5]${NC} Checking loan product knowledge base..."
+
+LOAN_JSON="$BACKEND_DIR/data/loan_products.json"
+
+if [ ! -f "$LOAN_JSON" ]; then
+    echo -e "${YELLOW}⚠️  data/loan_products.json not found — skipping loan knowledge ingestion${NC}"
+    echo -e "${YELLOW}    Copy your loan_products.json to backend/data/ and restart.${NC}"
+else
+    # Check if the loan_products ChromaDB collection already has data
+    LOAN_COUNT=$(uv run python -c "
+import sys; sys.path.insert(0,'.')
+try:
+    from memory.loan_knowledge_store import LoanKnowledgeStore
+    print(LoanKnowledgeStore().count())
+except Exception:
+    print(0)
+" 2>/dev/null || echo "0")
+
+    if [ "$LOAN_COUNT" -gt "0" ] 2>/dev/null; then
+        echo -e "${GREEN}✅${NC} Loan knowledge base already populated ($LOAN_COUNT chunks) — skipping ingestion"
+    else
+        echo -e "${YELLOW}📚 Ingesting loan products into ChromaDB...${NC}"
+        if uv run python scripts/ingest_loan_data.py --json "$LOAN_JSON"; then
+            echo -e "${GREEN}✅${NC} Loan products ingested successfully"
+        else
+            echo -e "${YELLOW}⚠️  Loan product ingestion failed (non-fatal — server will still start)${NC}"
+        fi
+    fi
+fi
+
+echo ""
+
+# ============================================================================
 # STEP 4: Start the backend server
 # ============================================================================
 
-echo -e "${BLUE}[4/4]${NC} Starting backend server..."
+echo -e "${BLUE}[5/5]${NC} Starting backend server..."
 echo ""
 
 echo "============================================================================"

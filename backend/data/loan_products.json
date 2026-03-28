@@ -1,0 +1,521 @@
+{
+  "bank": "Sahakar Cooperative Bank",
+  "last_updated": "2025-01-01",
+  "loan_products": [
+    {
+      "id": "HL-001",
+      "type": "Home Loan",
+      "name": "Griha Suvidha Home Loan",
+      "tagline": "Your dream home, our lifelong support",
+      "purpose": "Purchase, construction, or renovation of residential property",
+      "eligible_for": [
+        "Salaried individuals (min 2 years employment)",
+        "Self-employed professionals (min 3 years in practice)",
+        "Business owners (min 3 years profitable operations)",
+        "NRIs with Indian co-applicant"
+      ],
+      "eligibility_criteria": {
+        "age": { "min": 21, "max": 65, "unit": "years", "note": "Age at loan maturity must not exceed 70" },
+        "minimum_income": {
+          "salaried": 25000,
+          "self_employed": 30000,
+          "unit": "INR/month",
+          "note": "Net take-home after all deductions"
+        },
+        "cibil_score": { "min": 700, "preferred": 750 },
+        "loan_to_value": { "max_percent": 80, "note": "Bank funds up to 80% of property value" },
+        "foir": { "max_percent": 50, "description": "Fixed Obligation to Income Ratio - total EMIs including new loan should not exceed 50% of income" }
+      },
+      "loan_amount": {
+        "min": 200000,
+        "max": 7500000,
+        "unit": "INR",
+        "note": "Subject to property valuation and income eligibility"
+      },
+      "tenure": { "min_years": 1, "max_years": 30 },
+      "interest_rates": {
+        "base_rate_type": "RLLR (Repo Linked Lending Rate)",
+        "current_rllr": 8.50,
+        "slabs": [
+          { "cibil_range": "750-900", "rate_percent": 8.50, "category": "Prime" },
+          { "cibil_range": "700-749", "rate_percent": 8.85, "category": "Standard" },
+          { "cibil_range": "650-699", "rate_percent": 9.25, "category": "Sub-standard" }
+        ],
+        "special_rates": {
+          "women_borrowers": -0.05,
+          "existing_customers": -0.10,
+          "green_buildings": -0.10,
+          "unit": "percent reduction on applicable rate"
+        },
+        "rate_type_options": ["Floating", "Fixed (first 3 years, then floating)"]
+      },
+      "processing_fee": { "percent": 0.50, "min": 5000, "max": 25000, "unit": "INR", "gst_applicable": true },
+      "prepayment": {
+        "floating_rate": "No penalty",
+        "fixed_rate": "2% of outstanding principal if prepaid within lock-in period"
+      },
+      "required_documents": {
+        "identity_proof": ["Aadhaar Card", "PAN Card", "Passport", "Voter ID"],
+        "address_proof": ["Aadhaar Card", "Utility Bill (< 3 months)", "Bank Statement", "Passport"],
+        "income_documents_salaried": [
+          "Last 3 months salary slips",
+          "Form 16 for last 2 years",
+          "Last 6 months bank statements (salary account)",
+          "Employment letter / offer letter"
+        ],
+        "income_documents_self_employed": [
+          "ITR with computation for last 3 years",
+          "Audited P&L and Balance Sheet for 3 years",
+          "Last 12 months bank statements (current account)",
+          "Business proof (GST certificate, Shop Act license)"
+        ],
+        "property_documents": [
+          "Sale Agreement / Allotment Letter",
+          "Title Deed / 7/12 extract",
+          "Property tax receipts",
+          "Approved building plan",
+          "NOC from Society / Builder",
+          "Encumbrance Certificate (EC) for last 15 years",
+          "Property valuation report (by bank-approved valuer)"
+        ],
+        "co_applicant_documents": [
+          "All identity/address proofs",
+          "Income proof",
+          "Relationship proof with primary applicant"
+        ]
+      },
+      "emi_example": {
+        "principal": 5000000,
+        "rate_pa": 8.50,
+        "tenure_years": 20,
+        "approx_emi": 43391,
+        "note": "Use EMI = P × r × (1+r)^n / ((1+r)^n - 1)"
+      },
+      "special_schemes": [
+        "PMAY (Pradhan Mantri Awas Yojana) - subsidy up to ₹2.67 lakh for EWS/LIG",
+        "Top-up loan available after 12 EMIs on existing home loan",
+        "Balance transfer facility from other banks"
+      ],
+      "faq": [
+        { "q": "Can I include rental income for eligibility?", "a": "Yes, 70% of documented rental income is considered." },
+        { "q": "Can a co-applicant who is not earning be added?", "a": "Yes, as co-owner but only earning co-applicants improve eligibility." },
+        { "q": "Is land purchase covered?", "a": "Yes, but construction must begin within 2 years." }
+      ]
+    },
+    {
+      "id": "PL-002",
+      "type": "Personal Loan",
+      "name": "Tatkal Vyaktigat Loan",
+      "tagline": "No questions asked, money in 48 hours",
+      "purpose": "Any personal financial need – medical, wedding, travel, education, debt consolidation",
+      "eligible_for": [
+        "Salaried employees of government/PSU/private companies",
+        "Self-employed professionals with stable income",
+        "Existing bank account holders (preferred)"
+      ],
+      "eligibility_criteria": {
+        "age": { "min": 23, "max": 58, "unit": "years" },
+        "minimum_income": {
+          "salaried": 20000,
+          "self_employed": 25000,
+          "unit": "INR/month"
+        },
+        "minimum_employment": {
+          "current_employer": "1 year",
+          "total_experience": "2 years"
+        },
+        "cibil_score": { "min": 680, "preferred": 720 },
+        "foir": { "max_percent": 55 }
+      },
+      "loan_amount": {
+        "min": 50000,
+        "max": 1500000,
+        "unit": "INR"
+      },
+      "tenure": { "min_months": 12, "max_months": 60 },
+      "interest_rates": {
+        "base_rate_type": "Fixed",
+        "slabs": [
+          { "cibil_range": "750+", "rate_percent": 10.50, "category": "Excellent" },
+          { "cibil_range": "720-749", "rate_percent": 11.99, "category": "Good" },
+          { "cibil_range": "680-719", "rate_percent": 13.50, "category": "Average" }
+        ],
+        "employer_category_discount": {
+          "government/psu": -1.00,
+          "listed_private_company": -0.50,
+          "unit": "percent reduction"
+        }
+      },
+      "processing_fee": { "percent": 1.00, "min": 999, "max": 15000, "unit": "INR", "gst_applicable": true },
+      "collateral": "None required (unsecured)",
+      "prepayment": { "penalty": "4% of outstanding if closed before 12 months, nil after 12 months" },
+      "required_documents": {
+        "identity_proof": ["Aadhaar + PAN (mandatory)", "Passport / Voter ID (any one additional)"],
+        "income_documents_salaried": [
+          "Last 3 months salary slips",
+          "Last 6 months bank statements",
+          "Form 16 (latest year)"
+        ],
+        "income_documents_self_employed": [
+          "ITR for last 2 years",
+          "Last 12 months bank statements",
+          "Business registration proof"
+        ],
+        "additional": [
+          "Passport-size photographs (2)",
+          "Loan application form duly signed"
+        ]
+      },
+      "disbursal_timeline": {
+        "salaried_with_account": "24-48 hours after document submission",
+        "self_employed": "3-5 working days"
+      },
+      "emi_example": {
+        "principal": 500000,
+        "rate_pa": 11.99,
+        "tenure_months": 48,
+        "approx_emi": 13155
+      },
+      "faq": [
+        { "q": "Can I use this for medical emergency?", "a": "Yes, no end-use restriction. Medical bills can speed up approval." },
+        { "q": "Can I get a second personal loan?", "a": "Only if FOIR is within limits with both loans combined." }
+      ]
+    },
+    {
+      "id": "BL-003",
+      "type": "Business Loan / MSME Loan",
+      "name": "Udyog Vikas Business Loan",
+      "tagline": "Fuel your business, fuel the nation",
+      "purpose": "Working capital, machinery purchase, business expansion, inventory, GST/tax payments",
+      "eligible_for": [
+        "Proprietorships, partnerships, LLPs, Private Ltd companies",
+        "MSME registered businesses",
+        "Traders, manufacturers, service providers"
+      ],
+      "eligibility_criteria": {
+        "age": { "min": 21, "max": 65, "unit": "years", "applies_to": "Primary promoter/owner" },
+        "business_vintage": { "min_years": 2, "note": "Business must be profit-making for at least 2 years" },
+        "annual_turnover": { "min": 1500000, "unit": "INR" },
+        "cibil_score": { "individual": 680, "commercial_cibil": 600 },
+        "gst_registered": { "required": true, "returns_filed": "Last 12 months GST returns must be filed" }
+      },
+      "loan_amount": {
+        "min": 100000,
+        "max": 50000000,
+        "unit": "INR",
+        "collateral_free_limit": 2500000,
+        "note": "Above ₹25L requires collateral or CGTMSE guarantee"
+      },
+      "tenure": { "min_months": 12, "max_months": 84, "working_capital": "12-month revolving limit" },
+      "interest_rates": {
+        "base_rate_type": "MCLR-linked",
+        "slabs": [
+          { "category": "CGTMSE backed / Collateral secured", "rate_percent": 10.50 },
+          { "category": "Standard MSME", "rate_percent": 11.50 },
+          { "category": "Service sector unsecured", "rate_percent": 13.00 }
+        ],
+        "government_scheme_rates": {
+          "MUDRA_Shishu": { "limit": 50000, "rate_percent": 10.00 },
+          "MUDRA_Kishor": { "limit": 500000, "rate_percent": 11.00 },
+          "MUDRA_Tarun": { "limit": 1000000, "rate_percent": 11.50 }
+        }
+      },
+      "processing_fee": { "percent": 1.00, "min": 2500, "max": 50000, "gst_applicable": true },
+      "collateral": {
+        "below_25L": "CGTMSE guarantee or clean basis (credit score dependent)",
+        "above_25L": "Property mortgage, machinery hypothecation, or FD pledge"
+      },
+      "required_documents": {
+        "business_documents": [
+          "GST Certificate & last 12 months GSTR-3B returns",
+          "Udyam Registration Certificate (MSME)",
+          "Business registration (Shop Act / Partnership Deed / MOA-AOA)",
+          "Trade license / Factory license",
+          "Last 2 years ITR with audited financials",
+          "Last 12 months current account bank statements"
+        ],
+        "promoter_documents": [
+          "PAN + Aadhaar of all partners/directors",
+          "Last 2 years personal ITR",
+          "Personal bank statements (6 months)"
+        ],
+        "collateral_documents": [
+          "Property documents if mortgage",
+          "Machinery invoice / valuation report",
+          "Insurance policy copies"
+        ]
+      },
+      "government_schemes_linked": [
+        "PM SVANidhi (Street vendors – up to ₹50,000)",
+        "MUDRA (Micro Units Development & Refinance Agency)",
+        "CGTMSE (Credit Guarantee Fund Trust for MSMEs)",
+        "Stand-Up India (SC/ST and women entrepreneurs)"
+      ],
+      "faq": [
+        { "q": "Can a startup less than 2 years old apply?", "a": "Startups with DPIIT recognition may apply under special startup scheme at 12-14% with 1-year vintage." },
+        { "q": "Is overdraft facility available?", "a": "Yes, cash credit / overdraft against property or stock is available." }
+      ]
+    },
+    {
+      "id": "AL-004",
+      "type": "Agriculture / Kisan Loan",
+      "name": "Kisan Samridhi Loan",
+      "tagline": "Khet se khushali tak – From field to prosperity",
+      "purpose": "Crop cultivation, farm equipment, irrigation, land development, post-harvest storage, allied activities (dairy, poultry)",
+      "eligible_for": [
+        "Farmers owning agricultural land",
+        "Tenant farmers / sharecroppers with land lease",
+        "Agri-allied business owners",
+        "Joint Liability Groups (JLGs) of small/marginal farmers"
+      ],
+      "eligibility_criteria": {
+        "age": { "min": 18, "max": 70, "unit": "years" },
+        "land_ownership": { "note": "Own or leased land with valid 7/12 or satbara record" },
+        "cibil_score": { "min": "Not mandatory for KCC", "note": "Village-level credit history considered" },
+        "income": { "note": "Based on land holding and cropping pattern, not salary" }
+      },
+      "loan_amount": {
+        "kcc_short_term": { "max": 300000, "unit": "INR", "note": "Kisan Credit Card for seasonal crop needs" },
+        "term_loan": { "min": 100000, "max": 20000000, "unit": "INR", "note": "For equipment, irrigation, land development" },
+        "calculation_basis": "Scale of Finance per acre × cultivated area + 10% for post-harvest + 20% for maintenance"
+      },
+      "tenure": {
+        "kcc": "1 year revolving (renewed annually)",
+        "equipment_loan": "3-7 years",
+        "land_development": "Up to 15 years"
+      },
+      "interest_rates": {
+        "kcc_base": 7.00,
+        "interest_subvention": {
+          "prompt_repayment_discount": 3.00,
+          "effective_rate_if_timely": 4.00,
+          "note": "Government of India provides 2% subvention + 3% for prompt repayment under KCC scheme"
+        },
+        "term_loan": { "rate_percent": 9.00, "note": "Priority sector lending rate" },
+        "allied_activities": { "rate_percent": 10.50 }
+      },
+      "processing_fee": {
+        "kcc_upto_3L": "Nil",
+        "above_3L": "0.25% of loan amount"
+      },
+      "collateral": {
+        "upto_160000": "No collateral required (RBI mandate)",
+        "above_160000": "Hypothecation of crop + land mortgage or JLG guarantee"
+      },
+      "required_documents": {
+        "land_documents": [
+          "7/12 Utara / Satbara (land record extract)",
+          "8A (land revenue payment receipt)",
+          "Village map / survey number proof",
+          "Lease agreement (for tenant farmers)",
+          "Crop insurance details"
+        ],
+        "identity_documents": [
+          "Aadhaar Card (mandatory)",
+          "PAN Card",
+          "Voter ID",
+          "Bank passbook / account details"
+        ],
+        "farm_related": [
+          "Cropping pattern certificate from Talathi/Patwari",
+          "KCC application form",
+          "Soil Health Card (if available)"
+        ],
+        "equipment_loan_additional": [
+          "Quotation/invoice of equipment",
+          "Supplier details",
+          "Subsidy sanction letter (if PMKSY/RKVY)"
+        ]
+      },
+      "government_schemes": [
+        "PM Kisan Samman Nidhi (₹6000/year direct benefit)",
+        "PMFBY – Pradhan Mantri Fasal Bima Yojana (crop insurance)",
+        "PM Kisan MaanDhan (pension scheme)",
+        "RKVY – Rashtriya Krishi Vikas Yojana (subsidies)",
+        "Agri Infrastructure Fund (AIF) – Cold chain/warehousing"
+      ],
+      "special_features": [
+        "KCC doubles as debit card – use ATM to withdraw as needed",
+        "No need to visit bank repeatedly during crop season",
+        "Crop loan automatically qualifies for PMFBY insurance"
+      ],
+      "faq": [
+        { "q": "What if I don't own land but am a tenant farmer?", "a": "Lease agreement + Talathi certificate qualifies. JLG formation also possible." },
+        { "q": "Can I use KCC for buying tractor?", "a": "No, tractor requires a separate term loan. KCC is for working capital only." },
+        { "q": "What happens if crop fails?", "a": "PMFBY insurance covers crop loss. Restructuring available without penalty." }
+      ]
+    },
+    {
+      "id": "EL-005",
+      "type": "Education Loan",
+      "name": "Vidya Shakti Education Loan",
+      "tagline": "Invest in a degree, earn for a lifetime",
+      "purpose": "Higher education in India or abroad – tuition, hostel, books, laptop, examination fees, study abroad expenses",
+      "eligible_for": [
+        "Indian students admitted to recognized institutions",
+        "Students pursuing UG, PG, PhD, Diploma, Professional courses",
+        "Students going abroad (US, UK, Canada, Australia, Germany etc.)",
+        "Parents / Guardians as co-borrowers"
+      ],
+      "eligibility_criteria": {
+        "student_age": { "min": 16, "max": 35, "unit": "years" },
+        "admission": "Must have confirmed admission letter from recognized institution",
+        "academic_performance": { "min_percentage": 50, "note": "At least 50% marks in qualifying exam" },
+        "co_borrower": { "required": true, "who": "Parent/guardian with income proof" },
+        "cibil_score": { "note": "Based on co-borrower credit history; student's credit not primary factor" }
+      },
+      "loan_amount": {
+        "india": { "max": 1500000, "collateral_free_limit": 750000 },
+        "abroad": { "max": 7500000, "collateral_free_limit": 750000 },
+        "unit": "INR"
+      },
+      "tenure": {
+        "repayment_starts": "After course completion + 6-month moratorium (grace period)",
+        "max_repayment_years": 15,
+        "note": "During moratorium, simple interest accrues (can be paid optionally)"
+      },
+      "interest_rates": {
+        "india_base": 9.50,
+        "abroad_base": 10.50,
+        "concessions": {
+          "girl_student": -0.50,
+          "prompt_repayment": -1.00,
+          "IIT_IIM_NIT": -0.50,
+          "unit": "percent reduction"
+        },
+        "interest_subsidy": {
+          "scheme": "Central Sector Interest Subsidy (CSIS)",
+          "eligibility": "Annual family income < ₹4.5 lakh",
+          "benefit": "100% interest paid by government during moratorium period"
+        }
+      },
+      "processing_fee": { "india": "Nil", "abroad": "0.50% of loan amount, max ₹10,000" },
+      "collateral": {
+        "upto_400000": "No collateral, no margin",
+        "400001_to_750000": "No collateral, 5% margin money required",
+        "above_750000": "Tangible collateral required (property / FD) + 15% margin"
+      },
+      "expenses_covered": [
+        "Tuition and course fees",
+        "Hostel / accommodation charges",
+        "Examination, library, laboratory fees",
+        "Purchase of books, equipment, instruments",
+        "One laptop/computer",
+        "Study tours / project work",
+        "Travel expenses for abroad (economy class)",
+        "Caution deposit (refundable by institution)"
+      ],
+      "required_documents": {
+        "student_documents": [
+          "Admission letter from institution",
+          "Fee structure / cost of attendance",
+          "Mark sheets of last qualifying examination",
+          "Scholarship letters (if any)",
+          "Student visa (for abroad – before disbursal)"
+        ],
+        "co_borrower_documents": [
+          "PAN + Aadhaar",
+          "Last 3 months salary slips or ITR",
+          "6 months bank statements",
+          "Relationship proof with student"
+        ],
+        "collateral_documents": [
+          "Property documents (if above ₹7.5L)",
+          "FD receipts (if pledging FD)",
+          "Valuation report by bank-approved valuer"
+        ]
+      },
+      "government_schemes": [
+        "PM Vidya Lakshmi Portal (single window for all education loans)",
+        "CSIS – Central Sector Interest Subsidy for EWS/LIG students",
+        "Dr. Ambedkar Central Sector Scheme (OBC/EBC students abroad)",
+        "Padho Pradesh (minority students abroad)"
+      ],
+      "faq": [
+        { "q": "What if student doesn't get a job after course?", "a": "Repayment can be extended by up to 2 years. Restructuring available on request." },
+        { "q": "Is a part-time course eligible?", "a": "Only if it's a recognized degree/diploma from UGC/AICTE/government-approved institution." },
+        { "q": "Can loan be disbursed in installments?", "a": "Yes, directly to the institution semester-wise or year-wise." }
+      ]
+    },
+    {
+      "id": "GL-006",
+      "type": "Gold Loan",
+      "name": "Swarna Shakti Gold Loan",
+      "tagline": "Your gold works while you sleep",
+      "purpose": "Any purpose – agriculture, medical, business, personal emergency (fastest and simplest loan product)",
+      "eligible_for": [
+        "Any individual owning gold jewellery / ornaments",
+        "Age 18 and above",
+        "No income proof required",
+        "No CIBIL requirement"
+      ],
+      "eligibility_criteria": {
+        "age": { "min": 18, "max": 75, "unit": "years" },
+        "gold_purity": { "min_karat": 18, "preferred": 22, "note": "Hallmarked gold preferred; tested at branch" },
+        "gold_weight": { "min_grams": 5 },
+        "income_proof": "Not required",
+        "cibil": "Not required"
+      },
+      "loan_amount": {
+        "ltv_ratio": { "max_percent": 75, "note": "RBI mandates max 75% of gold value as loan" },
+        "min": 10000,
+        "max": 5000000,
+        "unit": "INR"
+      },
+      "tenure": { "min_months": 3, "max_months": 24, "note": "Bullet repayment option (pay all at end) available" },
+      "interest_rates": {
+        "standard": { "rate_percent": 9.50, "tenure": "Up to 6 months" },
+        "extended": { "rate_percent": 10.50, "tenure": "6-12 months" },
+        "agricultural_purpose": { "rate_percent": 7.00, "note": "If declared for agricultural use with KCC" }
+      },
+      "processing_fee": { "percent": 0.25, "min": 250, "max": 2500, "note": "Often waived for existing customers" },
+      "disbursal_timeline": "Same day – within 30 minutes of gold valuation",
+      "repayment_options": [
+        "Monthly EMI (principal + interest)",
+        "Bullet repayment (principal at end, interest monthly)",
+        "Interest-only during tenure, principal at end",
+        "Overdraft against gold (pay interest only on amount used)"
+      ],
+      "gold_safety": {
+        "storage": "Insured strong room / vault at branch",
+        "insurance": "Gold insured at full market value against theft/loss",
+        "return": "Gold returned immediately upon full repayment"
+      },
+      "required_documents": {
+        "mandatory": [
+          "Aadhaar Card",
+          "PAN Card (for loans above ₹50,000)",
+          "Gold ornaments for valuation"
+        ],
+        "optional": [
+          "Photograph (2 passport size)",
+          "Agricultural land records (for agri-gold loan rate)"
+        ]
+      },
+      "auction_policy": {
+        "notice_period": "3 notices over 60 days before auction",
+        "right_of_redemption": "Borrower can pay and retrieve gold until auction hammer falls",
+        "surplus_returned": "Any amount above outstanding loan + costs returned to borrower"
+      },
+      "faq": [
+        { "q": "Can I pledge gold coins?", "a": "Yes, but only bank-issued/hallmarked coins up to 50 grams. No foreign coins." },
+        { "q": "What if gold price drops?", "a": "Bank may request partial repayment to maintain 75% LTV. Margin call clause applies." },
+        { "q": "Is there a top-up option?", "a": "Yes, if gold value appreciates, you can get additional loan on same pledged gold." }
+      ]
+    }
+  ],
+  "common_rejection_reasons": [
+    "Low CIBIL score (below minimum threshold)",
+    "High FOIR – too many existing EMIs",
+    "Incomplete or mismatched documents",
+    "Property title defects (home loan)",
+    "Business vintage less than required",
+    "Negative area / blacklisted locality (home loan)",
+    "Income instability – frequent job changes"
+  ],
+  "contact": {
+    "branch_timing": "Mon-Sat, 9:30 AM to 4:30 PM",
+    "loan_helpline": "1800-XXX-XXXX (toll free)",
+    "email": "loans@sahakarbank.in"
+  }
+}
