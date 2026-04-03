@@ -1,20 +1,93 @@
-<<<<<<< HEAD
 # LoanAgent
-=======
-# React + Vite
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A comprehensive loan management and agent system built with modern web technologies and Python backend.
 
-Currently, two official plugins are available:
+## 🎯 Overview
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+LoanAgent is a full-stack application designed to streamline loan processing, management, and decision-making through an intelligent agent-based system. It combines a powerful Python backend with a responsive React + Vite frontend.
 
-## React Compiler
+## 📊 Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Backend**: Python (71.5%)
+- **Frontend**: JavaScript/React (23.3%)
+- **Styling**: CSS (2.1%)
+- **Build & Automation**: Shell (1.6%), Batchfile (1.3%)
+- **Markup**: HTML (0.2%)
 
-## Expanding the ESLint configuration
+## 🚀 Getting Started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
->>>>>>> ee20128 (frontend setup with vite + react)
+### Prerequisites
+
+- Python 3.8+
+- Node.js 16+
+- npm or yarn
+
+### Backend Setup
+
+1. Navigate to the backend directory:
+```bash
+cd backend
+```
+
+2. Create a virtual environment and install dependencies:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Run the backend server:
+```bash
+python app.py
+```
+
+### Frontend Setup
+
+1. Navigate to the frontend directory:
+```bash
+cd frontend
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Start the development server:
+```bash
+npm run dev
+```
+
+## 📁 Project Structure
+
+```
+LoanAgent/
+├── backend/          # Python backend application
+├── frontend/         # React + Vite frontend
+└── README.md        # This file
+```
+
+## 🛠️ Development
+
+### Frontend Features
+- React with Vite for fast development experience
+- HMR (Hot Module Replacement) for instant updates
+- ESLint for code quality
+- Modern JavaScript tooling
+
+### Backend Features
+- RESTful API endpoints
+- Intelligent loan agent system
+- Database integration for loan management
+
+## 📝 License
+
+This project is open source and available under the MIT License.
+
+## 👤 Author
+
+[Pandharimaske](https://github.com/Pandharimaske)
+
+## 📞 Support
+
+For questions or issues, please open a GitHub issue in the repository.
