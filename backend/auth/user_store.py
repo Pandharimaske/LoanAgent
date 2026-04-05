@@ -6,6 +6,7 @@ Handles user registration, login, and session management.
 import sys
 import json
 import sqlite3
+import hashlib
 from pathlib import Path
 from typing import Optional, Tuple
 from datetime import datetime, timedelta
@@ -66,6 +67,19 @@ class UserDatabase:
             )
         """)
 
+        # Admins table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                admin_id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login TEXT
+            )
+        """)
+
         # User sessions table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
@@ -79,6 +93,20 @@ class UserDatabase:
                 is_active INTEGER DEFAULT 1,
                 messages TEXT DEFAULT '[]',
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Admin sessions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                session_id TEXT PRIMARY KEY,
+                admin_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                logged_in_at TEXT NOT NULL,
+                last_activity TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                FOREIGN KEY (admin_id) REFERENCES admins(admin_id)
             )
         """)
 
@@ -107,6 +135,13 @@ class UserDatabase:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_active ON user_sessions(is_active)"
         )
+        
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id)"
+        )
 
         self.connection.commit()
 
@@ -117,6 +152,7 @@ class UserDatabase:
         name: str,
         password: str,
         customer_id: Optional[str] = None,
+        role: str = "customer",
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Register a new user.
@@ -127,6 +163,7 @@ class UserDatabase:
             name: Full name
             password: Plain text password
             customer_id: Optional customer ID (for customer users)
+            role: Optional user role (customer, admin)
             
         Returns:
             Tuple of (success: bool, user_id: str, error: str)
@@ -147,8 +184,8 @@ class UserDatabase:
                 """
                 INSERT INTO users (
                     user_id, username, email, name, password_hash,
-                    customer_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    customer_id, role, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -157,6 +194,7 @@ class UserDatabase:
                     name,
                     password_hash,
                     customer_id,
+                    role,
                     datetime.now().isoformat(),
                 ),
             )
@@ -165,10 +203,13 @@ class UserDatabase:
             return True, user_id, None
 
         except sqlite3.IntegrityError as e:
-            if "username" in str(e):
-                return False, None, "Username already exists"
-            elif "email" in str(e):
-                return False, None, "Email already exists"
+            error_msg = str(e).lower()
+            if "username" in error_msg:
+                return False, None, "Username already exists. Please use a different email."
+            elif "email" in error_msg:
+                return False, None, "Email already exists. Please login instead."
+            elif "customer_id" in error_msg:
+                return False, None, "An account with this email already exists. Please login instead."
             else:
                 return False, None, str(e)
         except Exception as e:
@@ -247,6 +288,117 @@ class UserDatabase:
                 user_id=user["user_id"],
                 email=user["email"],
                 customer_id=user["customer_id"],
+                role=user.get("role", "customer"),
+                logged_in_at=now,
+                last_activity=now,
+                expires_at=expires_at,
+                is_active=True,
+                messages=[],
+            )
+
+            return True, session, None
+
+        except Exception as e:
+            return False, None, str(e)
+
+    def register_admin(
+        self,
+        username: str,
+        email: str,
+        name: str,
+        password: str,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        if not self.connection:
+            self.connect()
+
+        try:
+            hash_val = hashlib.sha256(username.lower().encode()).hexdigest()[:8].upper()
+            admin_id = f"ADM_{hash_val}"
+            password_hash = PasswordManager.hash_password(password)
+
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO admins (
+                    admin_id, username, email, name, password_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    admin_id,
+                    username,
+                    email,
+                    name,
+                    password_hash,
+                    datetime.now().isoformat(),
+                ),
+            )
+            self.connection.commit()
+            return True, admin_id, None
+
+        except sqlite3.IntegrityError as e:
+            error_msg = str(e).lower()
+            if "username" in error_msg:
+                return False, None, "Admin username already exists."
+            elif "email" in error_msg:
+                return False, None, "Admin email already exists."
+            else:
+                return False, None, str(e)
+        except Exception as e:
+            return False, None, str(e)
+
+    def login_admin(
+        self, email: str, password: str, expires_in_hours: int = 12
+    ) -> Tuple[bool, Optional[UserSession], Optional[str]]:
+        if not self.connection:
+            self.connect()
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT * FROM admins WHERE email = ?", (email,))
+            row = cursor.fetchone()
+
+            if not row:
+                return False, None, "Invalid admin credentials"
+
+            admin = dict(row)
+
+            if not PasswordManager.verify_password(password, admin["password_hash"]):
+                return False, None, "Invalid admin credentials"
+
+            session_id = UserIDGenerator.generate_session_id()
+            now = datetime.now()
+            expires_at = now + timedelta(hours=expires_in_hours)
+
+            cursor.execute(
+                """
+                INSERT INTO admin_sessions (
+                    session_id, admin_id, email,
+                    logged_in_at, last_activity, expires_at, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    admin["admin_id"],
+                    admin["email"],
+                    now.isoformat(),
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                    1,
+                ),
+            )
+
+            cursor.execute(
+                "UPDATE admins SET last_login = ? WHERE admin_id = ?",
+                (now.isoformat(), admin["admin_id"]),
+            )
+            self.connection.commit()
+
+            session = UserSession(
+                session_id=session_id,
+                user_id=admin["admin_id"],
+                email=admin["email"],
+                customer_id=None,
+                role="admin",
                 logged_in_at=now,
                 last_activity=now,
                 expires_at=expires_at,
@@ -287,6 +439,7 @@ class UserDatabase:
                 email=user_data["email"],
                 name=user_data["name"],
                 customer_id=user_data["customer_id"],
+                role=user_data.get("role", "customer"),
                 created_at=datetime.fromisoformat(user_data["created_at"]),
                 last_login=datetime.fromisoformat(user_data["last_login"])
                 if user_data["last_login"]
@@ -315,7 +468,7 @@ class UserDatabase:
             # JOIN with users to get email (user_sessions stores username, not email)
             cursor.execute(
                 """
-                SELECT s.*, u.email
+                SELECT s.*, u.email, u.role
                 FROM user_sessions s
                 JOIN users u ON s.user_id = u.user_id
                 WHERE s.session_id = ?
@@ -325,7 +478,43 @@ class UserDatabase:
             row = cursor.fetchone()
 
             if not row:
-                return None
+                # Check if it's an admin session
+                cursor.execute(
+                    """
+                    SELECT s.*, a.email
+                    FROM admin_sessions s
+                    JOIN admins a ON s.admin_id = a.admin_id
+                    WHERE s.session_id = ?
+                    """,
+                    (session_id,),
+                )
+                admin_row = cursor.fetchone()
+                
+                if not admin_row:
+                    return None
+                    
+                session_data = dict(admin_row)
+                expires_at = datetime.fromisoformat(session_data["expires_at"])
+                if datetime.now() > expires_at:
+                    cursor.execute(
+                        "UPDATE admin_sessions SET is_active = 0 WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    self.connection.commit()
+                    return None
+
+                return UserSession(
+                    session_id=session_data["session_id"],
+                    user_id=session_data["admin_id"],
+                    email=session_data["email"],
+                    customer_id=None,
+                    role="admin",
+                    logged_in_at=datetime.fromisoformat(session_data["logged_in_at"]),
+                    last_activity=datetime.fromisoformat(session_data["last_activity"]),
+                    expires_at=expires_at,
+                    is_active=bool(session_data["is_active"]),
+                    messages=[],
+                )
 
             session_data = dict(row)
 
@@ -351,6 +540,7 @@ class UserDatabase:
                 user_id=session_data["user_id"],
                 email=session_data["email"],          # from JOIN with users table
                 customer_id=session_data["customer_id"],
+                role=session_data.get("role", "customer"),
                 logged_in_at=datetime.fromisoformat(
                     session_data["logged_in_at"]
                 ),
@@ -382,8 +572,13 @@ class UserDatabase:
 
         try:
             cursor = self.connection.cursor()
+            # Try to invalidate both to ensure it's logged out 
             cursor.execute(
                 "UPDATE user_sessions SET is_active = 0 WHERE session_id = ?",
+                (session_id,),
+            )
+            cursor.execute(
+                "UPDATE admin_sessions SET is_active = 0 WHERE session_id = ?",
                 (session_id,),
             )
             self.connection.commit()

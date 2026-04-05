@@ -16,6 +16,8 @@ const Login = () => {
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminSecret, setAdminSecret] = useState("");
 
   const handleChange = (e) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -31,7 +33,8 @@ const Login = () => {
 
     try {
       setLoading(true);
-      const response = await axios.post(`${BASE_URL}/auth/login`, formData);
+      const config = isAdmin ? { headers: { "X-Admin-Secret": adminSecret } } : {};
+      const response = await axios.post(`${BASE_URL}/auth/login`, formData, config);
 
       if (response.data.success) {
         localStorage.setItem("token", response.data.jwt_token);
@@ -39,7 +42,12 @@ const Login = () => {
         localStorage.setItem("userId", response.data.user_id);
         localStorage.setItem("user_id", response.data.user_id);
         localStorage.setItem("customer_id", response.data.customer_id || "");
-        navigate("/dashboard");
+        
+        if (response.data.role === "admin") {
+          navigate("/admin-panel");
+        } else {
+          navigate("/dashboard");
+        }
       } else {
         setError(response.data.message || "Login failed");
       }
@@ -304,8 +312,20 @@ const Login = () => {
                 </div>
               </motion.div>
 
-              {/* Forgot Password Link */}
-              <motion.div variants={itemVariants} className="flex justify-end">
+              {/* Admin Toggle */}
+              <motion.div variants={itemVariants} className="flex justify-between items-center mt-1">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="adminToggle"
+                    checked={isAdmin}
+                    onChange={(e) => setIsAdmin(e.target.checked)}
+                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-cyan-500 focus:ring-cyan-500/50"
+                  />
+                  <label htmlFor="adminToggle" className="text-xs text-slate-400 select-none cursor-pointer">
+                    Admin Access
+                  </label>
+                </div>
                 <button
                   type="button"
                   onClick={() => navigate("/forgot-password")}
@@ -314,6 +334,25 @@ const Login = () => {
                   Forgot password?
                 </button>
               </motion.div>
+
+              {/* Admin Secret Input */}
+              {isAdmin && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-1.5">
+                  <label className="block text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">
+                    Admin Secret Code
+                  </label>
+                  <div className="relative group/input">
+                    <ShieldCheck size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-cyan-500/70 group-focus-within/input:text-cyan-400 transition-all duration-300" />
+                    <input
+                      type="password"
+                      value={adminSecret}
+                      onChange={(e) => setAdminSecret(e.target.value)}
+                      placeholder="Enter the secret code"
+                      className="w-full bg-cyan-500/5 border border-cyan-500/20 rounded-xl px-4 py-3 pl-11 text-white placeholder-slate-500 outline-none focus:border-cyan-500/60 focus:ring-4 focus:ring-cyan-500/15 transition-all duration-300"
+                    />
+                  </div>
+                </motion.div>
+              )}
 
               {/* Submit Button */}
               <motion.button

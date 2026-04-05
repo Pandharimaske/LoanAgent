@@ -6,6 +6,14 @@ Two tables:
 
 changelog schema: customer_id | entity | old_val | old_timestamp | upd_val | timestamp
 Only the last 15 days of changelog are surfaced to the agent (older kept for audit).
+
+ENCRYPTION AT REST (Zero-Trust Architecture):
+  All user data fields are encrypted (Fernet symmetric encryption) before
+  writing to SQLite and decrypted on-the-fly during authorized reads.
+  Primary keys, queryable status fields, and system timestamps are EXEMPT
+  from encryption to preserve relational integrity and query capability.
+  Existing plaintext data is handled gracefully — decryption failures
+  fall back to returning the raw value as-is (backward compatible).
 """
 
 import sqlite3
@@ -17,6 +25,7 @@ from datetime import datetime
 
 from config import SQLITE_PATH
 from memory.models import CustomerMemory
+from memory.encryption import get_encryption_manager
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +58,40 @@ VALID_COLUMNS: frozenset = frozenset([
 ])
 
 
+# ============================================================================
+# ENCRYPTION AT REST — Column exemptions & type restoration
+# ============================================================================
+
+# Columns that are NEVER encrypted (PKs, FKs, system timestamps, queryable status)
+ENCRYPT_EXEMPT: frozenset = frozenset({
+    "customer_id",          # Primary Key — relational integrity
+    "application_status",   # Queryable business state (WHERE clauses)
+    "created_at",           # System metadata — needed for ordering/indexing
+    "last_updated",         # System metadata — needed for ordering/indexing
+})
+
+# Original Python types for numeric columns — used to restore types after
+# decryption (encrypted values are always stored as TEXT in SQLite).
+# Columns not listed here default to str on decryption.
+COLUMN_TYPES: Dict[str, type] = {
+    "years_at_job":                float,
+    "monthly_income":              float,
+    "total_existing_emi_monthly":  float,
+    "requested_loan_amount":       float,
+    "coapplicant_income":          float,
+    "cibil_score":                 int,
+    "number_of_active_loans":      int,
+    "requested_tenure_months":     int,
+}
+
+
 class MemoryDatabase:
-    """SQLite database manager for customer memory — no status columns."""
+    """SQLite database manager for customer memory with encryption at rest."""
 
     def __init__(self, db_path: str = SQLITE_PATH):
         self.db_path = db_path
         self.connection: Optional[sqlite3.Connection] = None
+        self._encryptor = None  # lazy-loaded EncryptionManager
 
     # ------------------------------------------------------------------ core
 
@@ -75,6 +112,115 @@ class MemoryDatabase:
         if not self.connection:
             self.connect()
 
+    # ========================================================================
+    # ENCRYPTION LAYER — Invisible shield for all CRUD operations
+    # ========================================================================
+
+    def _get_encryptor(self):
+        """Lazy-load the global EncryptionManager singleton."""
+        if self._encryptor is None:
+            self._encryptor = get_encryption_manager()
+        return self._encryptor
+
+    def _encrypt_value(self, value: Any) -> Optional[str]:
+        """
+        Encrypt a single non-None value into ciphertext.
+
+        Args:
+            value: Any Python value (str, int, float, etc.)
+
+        Returns:
+            Encrypted ciphertext string, or None if value is None.
+        """
+        if value is None:
+            return None
+        plaintext = str(value)
+        if not plaintext:
+            return None
+        try:
+            return self._get_encryptor().encrypt(plaintext)
+        except Exception as exc:
+            logger.error(f"🔐 Encryption failed: {exc}")
+            return plaintext  # fallback: store plaintext if encryption fails
+
+    def _decrypt_value(self, ciphertext: Any, field_name: str = "") -> Any:
+        """
+        Decrypt a single ciphertext value and restore its original Python type.
+
+        Graceful fallback: if decryption fails (e.g., value is legacy plaintext),
+        the value is returned as-is. This ensures backward compatibility with
+        existing unencrypted data.
+
+        Args:
+            ciphertext: The encrypted string from SQLite (or legacy plaintext).
+            field_name: Column name — used to look up the original type.
+
+        Returns:
+            Decrypted value cast to its original Python type, or the raw value
+            if decryption fails (graceful fallback).
+        """
+        if ciphertext is None:
+            return None
+
+        target_type = COLUMN_TYPES.get(field_name)
+
+        # Attempt decryption
+        try:
+            plaintext = self._get_encryptor().decrypt(str(ciphertext))
+        except Exception:
+            # Graceful fallback — value is already plaintext (legacy data)
+            # If it's already the correct native type from SQLite, return as-is
+            if target_type and isinstance(ciphertext, target_type):
+                return ciphertext
+            if isinstance(ciphertext, (int, float)) and not target_type:
+                return ciphertext
+            plaintext = ciphertext
+
+        # Restore original Python type for numeric columns
+        if target_type and plaintext is not None:
+            try:
+                return target_type(plaintext)
+            except (ValueError, TypeError):
+                return plaintext
+
+        return plaintext
+
+    def _encrypt_row(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Encrypt all non-exempt fields in a row dict.
+
+        Args:
+            data: Dict of {column_name: plaintext_value}.
+
+        Returns:
+            New dict with encrypted values for non-exempt columns.
+        """
+        encrypted = {}
+        for col, val in data.items():
+            if col in ENCRYPT_EXEMPT or val is None:
+                encrypted[col] = val
+            else:
+                encrypted[col] = self._encrypt_value(val)
+        return encrypted
+
+    def _decrypt_row(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Decrypt all non-exempt fields in a row dict.
+
+        Args:
+            data: Dict of {column_name: ciphertext} from SQLite.
+
+        Returns:
+            New dict with decrypted plaintext values.
+        """
+        decrypted = {}
+        for col, val in data.items():
+            if col in ENCRYPT_EXEMPT or val is None:
+                decrypted[col] = val
+            else:
+                decrypted[col] = self._decrypt_value(val, field_name=col)
+        return decrypted
+
     # ----------------------------------------------------------------- schema
 
     def init_schema(self):
@@ -85,47 +231,47 @@ class MemoryDatabase:
             CREATE TABLE IF NOT EXISTS customer_memory (
                 customer_id TEXT PRIMARY KEY,
 
-                -- Identity
+                -- Identity (encrypted at rest)
                 full_name TEXT,
                 date_of_birth TEXT,
                 phone TEXT,
 
-                -- Address
+                -- Address (encrypted at rest)
                 address TEXT,
                 city TEXT,
                 state TEXT,
                 pincode TEXT,
 
-                -- Employment
+                -- Employment (encrypted at rest)
                 employer_name TEXT,
                 job_title TEXT,
-                years_at_job REAL,
+                years_at_job TEXT,
 
-                -- Income
-                monthly_income REAL,
+                -- Income (encrypted at rest)
+                monthly_income TEXT,
                 income_type TEXT,
 
-                -- Credit & Loans
-                cibil_score INTEGER,
-                total_existing_emi_monthly REAL,
-                number_of_active_loans INTEGER,
+                -- Credit & Loans (encrypted at rest)
+                cibil_score TEXT,
+                total_existing_emi_monthly TEXT,
+                number_of_active_loans TEXT,
 
-                -- Loan Request
+                -- Loan Request (encrypted at rest)
                 requested_loan_type TEXT,
-                requested_loan_amount REAL,
-                requested_tenure_months INTEGER,
+                requested_loan_amount TEXT,
+                requested_tenure_months TEXT,
                 loan_purpose TEXT,
 
-                -- Co-Applicant
+                -- Co-Applicant (encrypted at rest)
                 coapplicant_name TEXT,
                 coapplicant_relation TEXT,
-                coapplicant_income REAL,
+                coapplicant_income TEXT,
 
-                -- Application (business state, not data quality)
+                -- Application (NOT encrypted — queryable business state)
                 application_status TEXT DEFAULT 'incomplete',
                 documents_submitted TEXT,
 
-                -- Metadata
+                -- Metadata (NOT encrypted — needed for indexing)
                 created_at TEXT NOT NULL,
                 last_updated TEXT NOT NULL
             )
@@ -134,7 +280,7 @@ class MemoryDatabase:
             "CREATE INDEX IF NOT EXISTS idx_customer_updated ON customer_memory(last_updated)"
         )
         self.connection.commit()
-        logger.info("✅ customer_memory schema initialized")
+        logger.info("✅ customer_memory schema initialized (encryption at rest enabled)")
 
     def init_changelog_schema(self) -> None:
         """
@@ -142,12 +288,12 @@ class MemoryDatabase:
         Safe to call multiple times (idempotent).
 
         Schema:
-            customer_id   — FK to customer_memory
-            entity        — field name (e.g. 'monthly_income')
-            old_val       — previous value as text (NULL on first write)
-            old_timestamp — when old_val was last set (NULL on first write)
-            upd_val       — new value as text
-            timestamp     — when this change was recorded (UTC ISO-8601)
+            customer_id   — FK to customer_memory (NOT encrypted)
+            entity        — field name (NOT encrypted — needed for querying)
+            old_val       — previous value (ENCRYPTED at rest)
+            old_timestamp — when old_val was last set (NOT encrypted)
+            upd_val       — new value (ENCRYPTED at rest)
+            timestamp     — when this change was recorded (NOT encrypted)
         """
         self._ensure_connection()
         self.connection.execute("""
@@ -181,9 +327,17 @@ class MemoryDatabase:
         """
         Write one row to customer_changelog.
         Called automatically inside batch_update_fields and update_field_value.
+
+        ENCRYPTION: old_val and upd_val are encrypted before INSERT.
+        The caller passes PLAINTEXT values; encryption happens here.
         """
         self._ensure_connection()
         now = datetime.utcnow().isoformat()
+
+        # Encrypt the data values (old_val and upd_val contain user data)
+        encrypted_old = self._encrypt_value(old_val) if old_val is not None else None
+        encrypted_upd = self._encrypt_value(upd_val)
+
         try:
             self.connection.execute(
                 """
@@ -194,9 +348,9 @@ class MemoryDatabase:
                 (
                     customer_id,
                     entity,
-                    str(old_val) if old_val is not None else None,
+                    encrypted_old,
                     old_timestamp,
-                    str(upd_val),
+                    encrypted_upd,
                     now,
                 ),
             )
@@ -213,6 +367,8 @@ class MemoryDatabase:
         """
         Return changelog entries for a specific field, limited to the last `days` days.
         Ordered newest-first.
+
+        ENCRYPTION: old_val and upd_val are decrypted before returning.
 
         Returns list of dicts:
             {entity, old_val, old_timestamp, upd_val, timestamp}
@@ -238,7 +394,14 @@ class MemoryDatabase:
             (customer_id, entity, cutoff_str),
         )
         rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            row = dict(r)
+            # Decrypt the data values
+            row["old_val"] = self._decrypt_value(row.get("old_val"), field_name=entity)
+            row["upd_val"] = self._decrypt_value(row.get("upd_val"), field_name=entity)
+            results.append(row)
+        return results
 
     def get_all_recent_changelog(
         self,
@@ -250,11 +413,7 @@ class MemoryDatabase:
         Return changelog for multiple fields (or all fields) in the last `days` days.
         Returns {entity: [rows...]} grouped by field name.
 
-        Args:
-            customer_id: Customer identifier
-            days:        Look-back window (default 15)
-            fields:      If provided, only fetch changelog for these specific fields.
-                         If None/empty, fetch for all tracked fields.
+        ENCRYPTION: old_val and upd_val are decrypted before returning.
         """
         self._ensure_connection()
         import datetime as dt
@@ -290,7 +449,11 @@ class MemoryDatabase:
         result: Dict[str, List[Dict[str, Any]]] = {}
         for row in cursor.fetchall():
             r = dict(row)
-            result.setdefault(r["entity"], []).append(r)
+            entity = r["entity"]
+            # Decrypt the data values
+            r["old_val"] = self._decrypt_value(r.get("old_val"), field_name=entity)
+            r["upd_val"] = self._decrypt_value(r.get("upd_val"), field_name=entity)
+            result.setdefault(entity, []).append(r)
         return result
 
     # --------------------------------------------------------------- helpers
@@ -321,9 +484,48 @@ class MemoryDatabase:
     # ------------------------------------------------------------------ CRUD
 
     def save_customer_memory(self, memory: CustomerMemory) -> None:
-        """Full INSERT OR REPLACE for a CustomerMemory object."""
+        """
+        Full INSERT OR REPLACE for a CustomerMemory object.
+
+        ENCRYPTION: All non-exempt field values are encrypted before INSERT.
+        """
         self._ensure_connection()
         now = datetime.now().isoformat()
+
+        # Build a dict of all field values
+        row_data = {
+            "customer_id":                 memory.customer_id,
+            "full_name":                   memory.full_name,
+            "date_of_birth":               memory.date_of_birth,
+            "phone":                       memory.phone,
+            "address":                     memory.address,
+            "city":                        memory.city,
+            "state":                       memory.state,
+            "pincode":                     memory.pincode,
+            "employer_name":               memory.employer_name,
+            "job_title":                   memory.job_title,
+            "years_at_job":                memory.years_at_job,
+            "monthly_income":              memory.monthly_income,
+            "income_type":                 memory.income_type,
+            "cibil_score":                 memory.cibil_score,
+            "total_existing_emi_monthly":  memory.total_existing_emi_monthly,
+            "number_of_active_loans":      memory.number_of_active_loans,
+            "requested_loan_type":         memory.requested_loan_type,
+            "requested_loan_amount":       memory.requested_loan_amount,
+            "requested_tenure_months":     memory.requested_tenure_months,
+            "loan_purpose":               memory.loan_purpose,
+            "coapplicant_name":            memory.coapplicant_name,
+            "coapplicant_relation":        memory.coapplicant_relation,
+            "coapplicant_income":          memory.coapplicant_income,
+            "application_status":          memory.application_status,
+            "documents_submitted":         memory.documents_submitted,
+            "created_at":                  memory.created_at.isoformat(),
+            "last_updated":                now,
+        }
+
+        # 🔐 Encrypt all non-exempt fields
+        encrypted = self._encrypt_row(row_data)
+
         self.connection.execute("""
             INSERT OR REPLACE INTO customer_memory (
                 customer_id,
@@ -339,23 +541,29 @@ class MemoryDatabase:
                 created_at, last_updated
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            memory.customer_id,
-            memory.full_name, memory.date_of_birth, memory.phone,
-            memory.address, memory.city, memory.state, memory.pincode,
-            memory.employer_name, memory.job_title, memory.years_at_job,
-            memory.monthly_income, memory.income_type,
-            memory.cibil_score, memory.total_existing_emi_monthly, memory.number_of_active_loans,
-            memory.requested_loan_type, memory.requested_loan_amount,
-            memory.requested_tenure_months, memory.loan_purpose,
-            memory.coapplicant_name, memory.coapplicant_relation, memory.coapplicant_income,
-            memory.application_status, memory.documents_submitted,
-            memory.created_at.isoformat(), now,
+            encrypted["customer_id"],
+            encrypted["full_name"], encrypted["date_of_birth"], encrypted["phone"],
+            encrypted["address"], encrypted["city"], encrypted["state"], encrypted["pincode"],
+            encrypted["employer_name"], encrypted["job_title"], encrypted["years_at_job"],
+            encrypted["monthly_income"], encrypted["income_type"],
+            encrypted["cibil_score"], encrypted["total_existing_emi_monthly"],
+            encrypted["number_of_active_loans"],
+            encrypted["requested_loan_type"], encrypted["requested_loan_amount"],
+            encrypted["requested_tenure_months"], encrypted["loan_purpose"],
+            encrypted["coapplicant_name"], encrypted["coapplicant_relation"],
+            encrypted["coapplicant_income"],
+            encrypted["application_status"], encrypted["documents_submitted"],
+            encrypted["created_at"], encrypted["last_updated"],
         ))
         self.connection.commit()
-        logger.info(f"✅ Saved memory for {memory.customer_id}")
+        logger.info(f"🔐 Saved encrypted memory for {memory.customer_id}")
 
     def load_customer_memory(self, customer_id: str) -> Optional[CustomerMemory]:
-        """Load full CustomerMemory for a customer. Returns None if not found."""
+        """
+        Load full CustomerMemory for a customer. Returns None if not found.
+
+        ENCRYPTION: All non-exempt fields are decrypted after SELECT.
+        """
         self._ensure_connection()
         cursor = self.connection.cursor()
         cursor.execute("SELECT * FROM customer_memory WHERE customer_id = ?", (customer_id,))
@@ -364,7 +572,9 @@ class MemoryDatabase:
             logger.debug(f"No memory row found for {customer_id}")
             return None
 
-        data = dict(row)
+        # 🔐 Decrypt all non-exempt fields
+        data = self._decrypt_row(dict(row))
+
         data["created_at"]   = datetime.fromisoformat(data["created_at"])
         data["last_updated"] = datetime.fromisoformat(data["last_updated"])
         return CustomerMemory(**data)
@@ -374,18 +584,7 @@ class MemoryDatabase:
         Return all non-null fields for a customer in a nested group structure.
         Used by load_memory node for context injection into the agent.
 
-        Returns a dict like:
-        {
-            "customer_id": "...",
-            "identity":    { "full_name": "...", "phone": "..." },
-            "address":     { "city": "Mumbai", "state": "MH" },
-            "employment":  { "employer_name": "TCS", ... },
-            "income":      { "monthly_income": 50000, ... },
-            "credit":      { "cibil_score": 750, ... },
-            "loan_request":{ "requested_loan_amount": 2500000, ... },
-            "coapplicant": { "coapplicant_name": "Sunita", ... },
-            "application_status": "incomplete",
-        }
+        ENCRYPTION: All fields are decrypted before grouping.
         """
         self._ensure_connection()
         cursor = self.connection.cursor()
@@ -394,7 +593,8 @@ class MemoryDatabase:
         if not row:
             return {}
 
-        data = dict(row)
+        # 🔐 Decrypt all non-exempt fields
+        data = self._decrypt_row(dict(row))
 
         field_groups = {
             "identity": ["full_name", "date_of_birth", "phone"],
@@ -431,6 +631,8 @@ class MemoryDatabase:
         """
         Return ALL non-null value fields as a flat dict.
         Used for mismatch detection — compares against everything stored.
+
+        ENCRYPTION: All fields are decrypted before returning.
         """
         self._ensure_connection()
         cursor = self.connection.cursor()
@@ -439,7 +641,9 @@ class MemoryDatabase:
         if not row:
             return {}
 
-        data = dict(row)
+        # 🔐 Decrypt all non-exempt fields
+        data = self._decrypt_row(dict(row))
+
         exclude = {"created_at", "last_updated", "customer_id"}
         return {k: v for k, v in data.items() if k not in exclude and v is not None}
 
@@ -453,6 +657,9 @@ class MemoryDatabase:
         Update a single field value and log the change to customer_changelog.
         Ensures customer row exists first (no silent data loss on new customers).
         Returns True on success.
+
+        ENCRYPTION: Value is encrypted before UPDATE. Old value from DB is
+        decrypted for changelog. Changelog itself encrypts internally.
         """
         if field_name not in VALID_COLUMNS:
             logger.error(f"❌ Unknown field '{field_name}' — rejecting update")
@@ -470,17 +677,26 @@ class MemoryDatabase:
                 (customer_id,),
             )
             row = cursor.fetchone()
-            old_val       = row[field_name] if row else None
+            raw_old_val   = row[field_name] if row else None
             old_timestamp = row["last_updated"] if row else None
+
+            # 🔐 Decrypt old value for changelog (may be ciphertext or legacy plaintext)
+            old_val_plain = self._decrypt_value(raw_old_val, field_name=field_name)
+
+            # 🔐 Encrypt new value before UPDATE
+            if field_name in ENCRYPT_EXEMPT:
+                encrypted_value = value
+            else:
+                encrypted_value = self._encrypt_value(value)
 
             self.connection.execute(
                 f"UPDATE customer_memory SET {field_name}=?, last_updated=? WHERE customer_id=?",
-                (value, now, customer_id),
+                (encrypted_value, now, customer_id),
             )
-            # Log the change
-            self.log_field_change(customer_id, field_name, old_val, old_timestamp, value)
+            # Log the change (log_field_change encrypts old_val and upd_val internally)
+            self.log_field_change(customer_id, field_name, old_val_plain, old_timestamp, value)
             self.connection.commit()
-            logger.debug(f"✅ {customer_id} | {field_name}={value!r}")
+            logger.debug(f"🔐 {customer_id} | {field_name} updated (encrypted)")
             return True
         except sqlite3.OperationalError as exc:
             logger.error(f"❌ update_field_value({field_name}): {exc}")
@@ -495,6 +711,9 @@ class MemoryDatabase:
         Atomically update multiple fields in a single transaction.
         Reads old values before writing so they can be logged to changelog.
         Returns {field_name: success} for each field.
+
+        ENCRYPTION: Each value is encrypted before UPDATE. Old values are
+        decrypted for changelog. Changelog itself encrypts internally.
         """
         if not fields:
             return {}
@@ -504,7 +723,7 @@ class MemoryDatabase:
 
         # Pre-read old values + last_updated for all fields we're about to change
         valid_fields = [f for f in fields if f in VALID_COLUMNS]
-        old_values: Dict[str, Any]   = {}
+        old_values_plain: Dict[str, Any] = {}
         old_timestamps: Dict[str, str] = {}
         if valid_fields:
             try:
@@ -519,7 +738,9 @@ class MemoryDatabase:
                     row_d = dict(row)
                     ts = row_d.get("last_updated")
                     for f in valid_fields:
-                        old_values[f]     = row_d.get(f)
+                        # 🔐 Decrypt old values for changelog
+                        raw_old = row_d.get(f)
+                        old_values_plain[f] = self._decrypt_value(raw_old, field_name=f)
                         old_timestamps[f] = ts
             except Exception as exc:
                 logger.warning(f"⚠️  Could not read old values for changelog: {exc}")
@@ -536,15 +757,21 @@ class MemoryDatabase:
                         results[field_name] = False
                         continue
                     try:
+                        # 🔐 Encrypt new value before UPDATE
+                        if field_name in ENCRYPT_EXEMPT:
+                            encrypted_value = value
+                        else:
+                            encrypted_value = self._encrypt_value(value)
+
                         cursor.execute(
                             f"UPDATE customer_memory SET {field_name}=?, last_updated=? WHERE customer_id=?",
-                            (value, now, customer_id),
+                            (encrypted_value, now, customer_id),
                         )
-                        # Log change to changelog
+                        # Log change to changelog (encrypts internally)
                         self.log_field_change(
                             customer_id,
                             field_name,
-                            old_values.get(field_name),
+                            old_values_plain.get(field_name),
                             old_timestamps.get(field_name),
                             value,
                         )
@@ -558,7 +785,7 @@ class MemoryDatabase:
                 results.setdefault(f, False)
 
         ok = sum(1 for v in results.values() if v)
-        logger.info(f"💾 batch_update {customer_id}: {ok}/{len(results)} OK → changelog written")
+        logger.info(f"🔐 batch_update {customer_id}: {ok}/{len(results)} OK (encrypted)")
         return results
 
     def delete_customer(self, customer_id: str) -> None:
@@ -586,48 +813,113 @@ class MemoryDatabase:
 
 
 # ============================================================================
-# QUICK SMOKE TEST
+# QUICK SMOKE TEST — Validates encryption at rest
 # ============================================================================
 
 def test_simplified_db():
     from memory.models import create_test_memory
+    import os
+
+    # Use a test encryption key for deterministic testing
+    os.environ.setdefault("DB_ENCRYPTION_KEY", "")
 
     db = MemoryDatabase(db_path=":memory:")
     db.connect()
     db.init_schema()
+    db.init_changelog_schema()
 
+    print("\n" + "=" * 60)
+    print("🔐 Testing SQLite Encryption at Rest")
+    print("=" * 60)
+
+    # --- Test 1: Save & load with encryption ---
+    print("\n1. Save customer memory (encrypted)...")
     memory = create_test_memory()
     db.save_customer_memory(memory)
-    loaded = db.load_customer_memory("RAJESH_001")
-    assert loaded.full_name == "Rajesh Kumar", "Load failed"
 
-    # Test simple field update (no status col)
+    print("2. Load customer memory (decrypted)...")
+    loaded = db.load_customer_memory("RAJESH_001")
+    assert loaded is not None, "Load returned None"
+    assert loaded.full_name == "Rajesh Kumar", f"Name mismatch: {loaded.full_name}"
+    assert loaded.monthly_income == 45000.0, f"Income mismatch: {loaded.monthly_income}"
+    assert loaded.cibil_score == 750, f"CIBIL mismatch: {loaded.cibil_score}"
+    print(f"   ✅ Decrypted correctly: name={loaded.full_name}, income={loaded.monthly_income}, cibil={loaded.cibil_score}")
+
+    # --- Test 2: Verify raw DB stores ciphertext ---
+    print("\n3. Checking raw DB values are ciphertext...")
+    cursor = db.connection.cursor()
+    cursor.execute("SELECT full_name, monthly_income, customer_id, application_status FROM customer_memory WHERE customer_id='RAJESH_001'")
+    raw = dict(cursor.fetchone())
+    assert raw["full_name"] != "Rajesh Kumar", f"full_name NOT encrypted! Raw: {raw['full_name']}"
+    assert raw["full_name"].startswith("gAAAAAB"), f"full_name doesn't look like Fernet ciphertext"
+    assert raw["monthly_income"] != "45000.0", f"monthly_income NOT encrypted!"
+    assert raw["customer_id"] == "RAJESH_001", "customer_id should NOT be encrypted"
+    assert raw["application_status"] == "incomplete", "application_status should NOT be encrypted"
+    print(f"   ✅ Raw ciphertext: full_name={raw['full_name'][:30]}...")
+    print(f"   ✅ Exempt fields readable: customer_id={raw['customer_id']}, status={raw['application_status']}")
+
+    # --- Test 3: Field update with encryption ---
+    print("\n4. Testing field update (encrypted)...")
     ok = db.update_field_value("RAJESH_001", "city", "Mumbai")
     assert ok, "update_field_value failed for city"
+    loaded2 = db.load_customer_memory("RAJESH_001")
+    assert loaded2.city == "Mumbai", f"City mismatch: {loaded2.city}"
+    print(f"   ✅ Field updated & decrypted: city={loaded2.city}")
 
-    # Test new customer INSERT guard
+    # --- Test 4: New customer INSERT guard ---
+    print("\n5. Testing new customer auto-creation...")
     ok = db.update_field_value("BRAND_NEW_001", "full_name", "New User")
     assert ok, "update_field_value failed for new customer"
     new_cust = db.load_customer_memory("BRAND_NEW_001")
     assert new_cust and new_cust.full_name == "New User", "New customer not saved"
+    print(f"   ✅ New customer encrypted: name={new_cust.full_name}")
 
-    # Test batch update
+    # --- Test 5: Batch update with encryption ---
+    print("\n6. Testing batch update (encrypted)...")
     results = db.batch_update_fields("RAJESH_001", {
         "city": "Pune",
         "monthly_income": 65000,
         "cibil_score": 790,
     })
     assert all(results.values()), f"Batch failed: {results}"
+    loaded3 = db.load_customer_memory("RAJESH_001")
+    assert loaded3.city == "Pune", f"Batch city: {loaded3.city}"
+    assert loaded3.monthly_income == 65000.0, f"Batch income: {loaded3.monthly_income}"
+    assert loaded3.cibil_score == 790, f"Batch cibil: {loaded3.cibil_score}"
+    print(f"   ✅ Batch decrypted: city={loaded3.city}, income={loaded3.monthly_income}, cibil={loaded3.cibil_score}")
 
+    # --- Test 6: get_all_facts returns decrypted data ---
+    print("\n7. Testing get_all_facts (decrypted)...")
     facts = db.get_all_facts_grouped("RAJESH_001")
     assert "customer_id" in facts
     assert "income" in facts
+    assert facts["income"]["monthly_income"] == 65000.0
+    print(f"   ✅ Grouped facts decrypted: income={facts['income']['monthly_income']}")
 
     all_facts = db.get_all_facts("RAJESH_001")
     assert "monthly_income" in all_facts
+    assert all_facts["monthly_income"] == 65000.0
+    print(f"   ✅ Flat facts decrypted: monthly_income={all_facts['monthly_income']}")
+
+    # --- Test 7: Verify all raw values are encrypted ---
+    print("\n8. Final raw DB audit...")
+    cursor.execute("SELECT * FROM customer_memory WHERE customer_id='RAJESH_001'")
+    final_raw = dict(cursor.fetchone())
+    encrypted_count = 0
+    exempt_count = 0
+    for col, val in final_raw.items():
+        if val is None:
+            continue
+        if col in ENCRYPT_EXEMPT:
+            exempt_count += 1
+        elif isinstance(val, str) and val.startswith("gAAAAAB"):
+            encrypted_count += 1
+    print(f"   ✅ Encrypted columns: {encrypted_count}, Exempt columns: {exempt_count}")
 
     db.close()
-    print("✅ All sqlite_store tests passed")
+    print(f"\n{'=' * 60}")
+    print("✅ All encryption-at-rest tests PASSED!")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

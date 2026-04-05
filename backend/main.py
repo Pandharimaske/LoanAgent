@@ -16,6 +16,7 @@ from config import DEBUG, LOG_LEVEL
 from api.auth_routes import router as auth_router
 from api.session_routes import router as session_router
 from api.chat_routes import router as chat_router
+from api.admin_routes import router as admin_router
 from auth.user_store import UserDatabase
 from memory.sqlite_store import MemoryDatabase
 from memory.vector_store import VectorStore
@@ -59,6 +60,9 @@ app.include_router(session_router)
 # Include chat routes (new agent orchestration)
 app.include_router(chat_router)
 
+# Include admin routes
+app.include_router(admin_router)
+
 
 # ============================================================================
 # ROOT ENDPOINT
@@ -81,6 +85,9 @@ async def root():
                 "logout": "POST /auth/logout",
                 "check_session": "GET /auth/session/{session_id}",
                 "health": "GET /auth/health",
+            },
+            "admin": {
+                "users": "GET /admin/users",
             },
             "docs": {
                 "swagger": "/docs",

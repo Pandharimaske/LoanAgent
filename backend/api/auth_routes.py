@@ -39,6 +39,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     name: str
     password: str
+    role: str = "customer"
+    admin_secret: Optional[str] = None
 
 
 class RegisterResponse(BaseModel):
@@ -64,6 +66,7 @@ class LoginResponse(BaseModel):
     jwt_token: str
     expires_at: str
     customer_id: Optional[str] = None
+    role: str = "customer"
     message: str
 
 
@@ -119,55 +122,82 @@ async def register(
         HTTPException 400: If validation fails or user exists
     """
     try:
+        import os
+        
+        # Verify admin secret if role is admin
+        if request.role == "admin":
+            expected_secret = os.getenv("ADMIN_INVITE_CODE")
+            if not expected_secret or request.admin_secret != expected_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid or missing admin invite code",
+                )
+
         # Generate username from email (part before @)
         username = request.email.split("@")[0]
         
-        # Generate a deterministic customer_id from email so it is stable across
-        # logins and correctly scopes the user's data in SQLite + ChromaDB.
-        # Format: CUST_<first 8 hex chars of SHA256(email)>
-        import hashlib
-        customer_id = "CUST_" + hashlib.sha256(request.email.lower().encode()).hexdigest()[:8].upper()
-        
-        # Register user
-        success, user_id, error = db.register_user(
-            username=username,
-            email=request.email,
-            name=request.name,
-            password=request.password,
-            customer_id=customer_id,
-        )
-
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error or "Registration failed",
+        if request.role == "admin":
+            # Register admin
+            success, user_id, error = db.register_admin(
+                username=username,
+                email=request.email,
+                name=request.name,
+                password=request.password,
             )
-
-        # ----------------------------------------------------------------
-        # Seed an empty customer_memory row so the agent never has to
-        # auto-provision it mid-conversation. Pre-fill full_name from the
-        # registration form so the agent already knows the user's name.
-        # ----------------------------------------------------------------
-        try:
-            now = datetime.now()
-            initial_memory = CustomerMemory(
+            
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=error or "Admin registration failed",
+                )
+        else:
+            # Generate a deterministic customer_id from email so it is stable across
+            # logins and correctly scopes the user's data in SQLite + ChromaDB.
+            # Format: CUST_<first 8 hex chars of SHA256(email)>
+            import hashlib
+            customer_id = "CUST_" + hashlib.sha256(request.email.lower().encode()).hexdigest()[:8].upper()
+            
+            # Register user
+            success, user_id, error = db.register_user(
+                username=username,
+                email=request.email,
+                name=request.name,
+                password=request.password,
                 customer_id=customer_id,
-                full_name=request.name,
-                created_at=now,
-                last_updated=now,
+                role=request.role,
             )
-            mem_db = MemoryDatabase(db_path=SQLITE_PATH)
-            mem_db.connect()
-            mem_db.init_schema()
-            mem_db.save_customer_memory(initial_memory)
-            mem_db.close()
-        except Exception as mem_err:
-            # Non-fatal — user is still registered, memory row can be 
-            # created on first chat turn.
-            import logging
-            logging.getLogger(__name__).warning(
-                f"⚠️  Could not initialise customer_memory for {customer_id}: {mem_err}"
-            )
+
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=error or "Registration failed",
+                )
+
+            # ----------------------------------------------------------------
+            # Seed an empty customer_memory row so the agent never has to
+            # auto-provision it mid-conversation. Pre-fill full_name from the
+            # registration form so the agent already knows the user's name.
+            # ----------------------------------------------------------------
+            try:
+                now = datetime.now()
+                initial_memory = CustomerMemory(
+                    customer_id=customer_id,
+                    full_name=request.name,
+                    created_at=now,
+                    last_updated=now,
+                )
+                mem_db = MemoryDatabase(db_path=SQLITE_PATH)
+                mem_db.connect()
+                mem_db.init_schema()
+                mem_db.save_customer_memory(initial_memory)
+                mem_db.close()
+            except Exception as mem_err:
+                # Non-fatal — user is still registered, memory row can be 
+                # created on first chat turn.
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"⚠️  Could not initialise customer_memory for {customer_id}: {mem_err}"
+                )
 
         return RegisterResponse(
             success=True,
@@ -185,9 +215,12 @@ async def register(
         )
 
 
+from fastapi import Header
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: LoginRequest,
+    x_admin_secret: Optional[str] = Header(None, alias="X-Admin-Secret"),
     db: UserDatabase = Depends(get_db),
 ):
     """
@@ -204,11 +237,29 @@ async def login(
         HTTPException 401: If credentials invalid
     """
     try:
-        # Attempt login
-        success, session, error = db.login(
-            email=request.email,
-            password=request.password,
-        )
+        import os
+        
+        # We determine if it's an admin login attempt entirely by the presence 
+        # of the x_admin_secret header. Wait, in `LoginRequest` we don't have role.
+        # Let's check x_admin_secret:
+        if x_admin_secret:
+            expected_secret = os.getenv("ADMIN_INVITE_CODE")
+            if not expected_secret or x_admin_secret != expected_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid or missing admin secret code",
+                )
+                
+            success, session, error = db.login_admin(
+                email=request.email,
+                password=request.password,
+            )
+        else:
+            # Attempt normal login
+            success, session, error = db.login(
+                email=request.email,
+                password=request.password,
+            )
 
         if not success or not session:
             raise HTTPException(
@@ -222,6 +273,7 @@ async def login(
                 user_id=session.user_id,
                 email=session.email,
                 customer_id=session.customer_id,
+                role=session.role,
             )
         except Exception as e:
             raise HTTPException(
@@ -237,6 +289,7 @@ async def login(
             jwt_token=jwt_token,
             expires_at=session.expires_at.isoformat(),
             customer_id=session.customer_id,
+            role=session.role,
             message=f"Login successful. Session valid until {session.expires_at.isoformat()}",
         )
 

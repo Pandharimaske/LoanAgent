@@ -477,7 +477,19 @@ async def confirm_save(request: ConfirmSaveRequest):
 
         if not request.approved:
             logger.info(f"🚫 User discarded pending fields for {request.customer_id}")
-            msg = await _translate("No problem! I won't save those details.")
+            english_msg = "No problem! I won't save those details."
+            msg = await _translate(english_msg)
+            if session and "messages" in session:
+                session["messages"].append({
+                    "role": "user",
+                    "content": "❌ No, discard those changes.",
+                    "timestamp": datetime.now().isoformat()
+                })
+                session["messages"].append({
+                    "role": "assistant",
+                    "content": english_msg,
+                    "timestamp": datetime.now().isoformat()
+                })
             return ConfirmSaveResponse(success=True, status="discarded", response=msg)
 
         # Retrieve pending_fields from in-memory session
@@ -520,6 +532,19 @@ async def confirm_save(request: ConfirmSaveRequest):
             f"({', '.join(fields_written).replace('_', ' ')})."
         )
         msg = await _translate(english_msg)
+
+        if session and "messages" in session:
+            session["messages"].append({
+                "role": "user",
+                "content": "✅ Yes, I confirm are correct. Please save them.",
+                "timestamp": datetime.now().isoformat()
+            })
+            session["messages"].append({
+                "role": "assistant",
+                "content": english_msg,
+                "timestamp": datetime.now().isoformat()
+            })
+
         return ConfirmSaveResponse(
             success=True,
             status="saved",

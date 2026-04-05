@@ -101,6 +101,7 @@ class TokenManager:
         user_id: str,
         username: str,
         customer_id: Optional[str] = None,
+        role: str = "customer",
         expires_in_hours: int = 24,
     ) -> dict:
         """
@@ -110,6 +111,7 @@ class TokenManager:
             user_id: User ID
             username: Username
             customer_id: Optional customer ID
+            role: Optional user role (e.g. admin, customer)
             expires_in_hours: Hours until token expires
             
         Returns:
@@ -122,6 +124,7 @@ class TokenManager:
             "user_id": user_id,
             "username": username,
             "customer_id": customer_id,
+            "role": role,
             "issued_at": now.isoformat(),
             "expires_at": expires_at.isoformat(),
         }
@@ -148,6 +151,7 @@ class TokenManager:
         user_id: str,
         email: str,
         customer_id: Optional[str] = None,
+        role: str = "customer",
         expires_in_hours: int = None,
     ) -> str:
         """
@@ -157,6 +161,7 @@ class TokenManager:
             user_id: User ID
             email: User email
             customer_id: Optional customer ID
+            role: Optional user role
             expires_in_hours: Hours until token expires (defaults to JWT_EXPIRES_HOURS)
             
         Returns:
@@ -174,13 +179,14 @@ class TokenManager:
         if expires_in_hours is None:
             expires_in_hours = JWT_EXPIRES_HOURS
         
-        now = datetime.now()
+        now = datetime.utcnow()
         expires_at = now + timedelta(hours=expires_in_hours)
         
         payload = {
             "user_id": user_id,
             "email": email,
             "customer_id": customer_id,
+            "role": role,
             "iat": now,
             "exp": expires_at,
         }
@@ -206,7 +212,12 @@ class TokenManager:
             raise RuntimeError("JWT_SECRET not configured")
         
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            payload = jwt.decode(
+                token, 
+                JWT_SECRET, 
+                algorithms=["HS256"], 
+                options={"leeway": 10}
+            )
             return payload
         except jwt.ExpiredSignatureError:
             print("⏰ Token has expired")

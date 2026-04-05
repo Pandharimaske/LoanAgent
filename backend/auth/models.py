@@ -27,6 +27,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """User creation request."""
     password: str
+    role: str = "customer"
     
     @field_validator('password')
     @classmethod
@@ -40,6 +41,7 @@ class User(UserBase):
     """User model (with ID and metadata)."""
     user_id: str
     customer_id: Optional[str] = None
+    role: str = "customer"
     created_at: datetime
     last_login: Optional[datetime] = None
     
@@ -62,6 +64,7 @@ class UserResponse(BaseModel):
     email: str
     name: str
     customer_id: Optional[str] = None
+    role: str = "customer"
     created_at: datetime
     last_login: Optional[datetime] = None
 
@@ -72,6 +75,7 @@ class UserSession(BaseModel):
     user_id: str
     email: str
     customer_id: Optional[str] = None
+    role: str = "customer"
     logged_in_at: datetime
     last_activity: datetime
     expires_at: datetime
@@ -88,6 +92,7 @@ class TokenData(BaseModel):
     user_id: str
     email: str
     customer_id: Optional[str] = None
+    role: str = "customer"
     issued_at: datetime
     expires_at: datetime
 

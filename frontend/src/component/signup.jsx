@@ -18,6 +18,8 @@ const SignUp = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminSecret, setAdminSecret] = useState("");
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -39,21 +41,34 @@ const SignUp = () => {
 
     try {
       setLoading(true);
-      const response = await axios.post(`${BASE_URL}/auth/register`, { email, name, password });
+      const registerPayload = { email, name, password };
+      if (isAdmin) {
+        registerPayload.role = "admin";
+        registerPayload.admin_secret = adminSecret;
+      }
+      
+      const response = await axios.post(`${BASE_URL}/auth/register`, registerPayload);
 
       if (response.data.success) {
         localStorage.setItem("user_id", response.data.user_id);
         localStorage.setItem("email", response.data.email);
 
         try {
-          const loginResponse = await axios.post(`${BASE_URL}/auth/login`, { email, password });
+          const config = isAdmin ? { headers: { "X-Admin-Secret": adminSecret } } : {};
+          const loginResponse = await axios.post(`${BASE_URL}/auth/login`, { email, password }, config);
+          
           if (loginResponse.data.success) {
             localStorage.setItem("token", loginResponse.data.jwt_token);
             localStorage.setItem("sessionId", loginResponse.data.session_id);
             localStorage.setItem("userId", loginResponse.data.user_id);
             localStorage.setItem("user_id", loginResponse.data.user_id);
             localStorage.setItem("customer_id", loginResponse.data.customer_id || "");
-            navigate("/dashboard");
+            
+            if (loginResponse.data.role === "admin") {
+              navigate("/admin-panel");
+            } else {
+              navigate("/dashboard");
+            }
           } else {
             navigate("/login");
           }
@@ -364,6 +379,39 @@ const SignUp = () => {
                   </div>
                 )}
               </motion.div>
+
+              {/* Admin Toggle */}
+              <motion.div variants={itemVariants} className="flex items-center gap-2 mt-1">
+                <input
+                  type="checkbox"
+                  id="adminToggle"
+                  checked={isAdmin}
+                  onChange={(e) => setIsAdmin(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-500 focus:ring-purple-500/50"
+                />
+                <label htmlFor="adminToggle" className="text-xs text-slate-400 select-none cursor-pointer">
+                  Register as Bank Admin
+                </label>
+              </motion.div>
+
+              {/* Admin Secret Input */}
+              {isAdmin && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-1">
+                  <label className="block text-[10px] font-semibold text-purple-400 uppercase tracking-wider">
+                    Admin Invite Code
+                  </label>
+                  <div className="relative group/input">
+                    <ShieldCheck size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-500/70 group-focus-within/input:text-purple-400 transition-all duration-300" />
+                    <input
+                      type="password"
+                      value={adminSecret}
+                      onChange={(e) => setAdminSecret(e.target.value)}
+                      placeholder="Enter the secret code"
+                      className="w-full bg-purple-500/5 border border-purple-500/20 rounded-xl px-4 py-3 pl-11 text-white placeholder-slate-500 text-[14px] outline-none focus:border-purple-500/60 focus:ring-4 focus:ring-purple-500/15 transition-all duration-300"
+                    />
+                  </div>
+                </motion.div>
+              )}
 
               {/* Submit Button */}
               <motion.button
